@@ -105,7 +105,7 @@ value = "ap1:…"                         # encrypted to public_key
 
 - **Crypto:** the passkey's WebAuthn **PRF** output → HKDF → unwraps the vault's X25519 key (XChaCha20-Poly1305). Values are sealed to the public key (X25519 + HKDF + ChaCha20-Poly1305), bound to vault id and name.
 - **Daemon memory:** the key lives in `mlock`ed, `MADV_DONTDUMP` pages with guard pages, is zeroized on lock/expiry/sleep/logout, no core dumps, `PR_SET_DUMPABLE=0` / `PT_DENY_ATTACH` against same-user `ptrace`.
-- **Access:** Unix socket `0600` in a `0700` dir with peer-uid check; web UI on `127.0.0.1` only, `localhost` hosts only, same-origin POSTs, strict CSP, one-time 15-minute link tokens in the URL fragment.
+- **Access:** Unix socket `0600` in a `0700` dir with peer-uid check; web UI on `127.0.0.1` only, `localhost` hosts only, same-origin POSTs, strict CSP, one-time 60-minute link tokens in the URL fragment.
 - **Editor:** needs the passkey, but doesn't unlock the vault for agents; existing values are never sent to the page.
 - **Tested:** memory scans of the running daemon (key only in a locked no-dump page, gone after `lock`), ptrace/core-dump denial, browser E2E with a virtual PRF authenticator.
 

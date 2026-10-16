@@ -29,7 +29,7 @@ use agentpass_protocol as proto;
 pub const DEFAULT_PORT: u16 = 47117;
 /// Longest custom unlock duration the web UI accepts.
 pub const MAX_DURATION: Duration = Duration::from_secs(30 * 24 * 3600);
-const FLOW_TTL: Duration = Duration::from_secs(15 * 60);
+const FLOW_TTL: Duration = Duration::from_secs(60 * 60);
 const FLOW_MAX_ATTEMPTS: u32 = 5;
 const RESULT_TTL: Duration = Duration::from_secs(3600);
 const DEFAULT_IDLE_EXIT: Duration = Duration::from_secs(30 * 60);

@@ -23,15 +23,26 @@ enum Phase {
     Fatal(String),
 }
 
+/// The flow token: from the URL fragment (then removed from the address
+/// bar and kept in this tab's sessionStorage), or from sessionStorage after
+/// a reload.
 fn take_token() -> Option<String> {
     let window = web_sys::window()?;
-    let hash = window.location().hash().ok()?;
-    let token = hash.trim_start_matches('#').to_owned();
-    if let Ok(history) = window.history() {
-        let path = window.location().pathname().unwrap_or_default();
-        let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&path));
+    let path = window.location().pathname().unwrap_or_default();
+    let storage = window.session_storage().ok().flatten();
+    let key = format!("agentpass-token:{path}");
+    let hash = window.location().hash().ok().unwrap_or_default();
+    let fresh = hash.trim_start_matches('#').to_owned();
+    if !fresh.is_empty() {
+        if let Some(st) = &storage {
+            let _ = st.set_item(&key, &fresh);
+        }
+        if let Ok(history) = window.history() {
+            let _ = history.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&path));
+        }
+        return Some(fresh);
     }
-    (!token.is_empty()).then_some(token)
+    storage.and_then(|st| st.get_item(&key).ok().flatten()).filter(|t| !t.is_empty())
 }
 
 #[function_component(App)]
