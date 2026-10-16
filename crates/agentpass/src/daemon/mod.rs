@@ -2,6 +2,7 @@
 //! answers CLI requests over a Unix socket and serves the passkey web UI on
 //! `127.0.0.1`.
 
+mod edit;
 #[cfg(target_os = "macos")]
 mod macos;
 mod watch;
@@ -66,6 +67,27 @@ enum FlowKind {
         vault_id: String,
         suggest_secs: Option<u64>,
     },
+    /// Secrets editor. `key` is set once the passkey check succeeded and is
+    /// wiped when the session ends; it never unlocks the vault for agents.
+    Edit {
+        vault_id: String,
+        key: Option<PrivateKey>,
+        changes: usize,
+    },
+    Request {
+        vault_id: String,
+        key: String,
+        description: Option<String>,
+        reason: Option<String>,
+    },
+}
+
+/// Result of a successful flow step.
+enum Step {
+    /// The flow is finished (message, detail for the CLI).
+    Finished(String, Option<String>),
+    /// The flow continues (e.g. the editor after its passkey check).
+    Continue(String),
 }
 
 struct Flow {
@@ -167,7 +189,7 @@ impl Daemon {
         let n = st.unlocked.len();
         st.unlocked.clear();
         st.flows
-            .retain(|_, f| !matches!(f.kind, FlowKind::Enroll { .. }));
+            .retain(|_, f| !matches!(f.kind, FlowKind::Enroll { .. } | FlowKind::Edit { .. }));
         if n > 0 {
             log!("locked {n} vault(s): {reason}");
         }
@@ -344,6 +366,44 @@ impl Daemon {
                 };
                 self.start_flow(v.path, kind, "unlock")
             }
+            Request::Edit { vault_path } => {
+                let v = load_vault(&vault_path)?;
+                if v.file.passkeys.is_empty() {
+                    return Err(Fail::invalid("this vault has no passkeys"));
+                }
+                let kind = FlowKind::Edit {
+                    vault_id: v.id().to_owned(),
+                    key: None,
+                    changes: 0,
+                };
+                self.start_flow(v.path, kind, "edit")
+            }
+            Request::RequestSecret {
+                vault_path,
+                key,
+                description,
+                reason,
+            } => {
+                let v = load_vault(&vault_path)?;
+                vault::validate_key_name(&key).map_err(|e| Fail::invalid(e.to_string()))?;
+                let clean = |s: Option<String>, max: usize| {
+                    s.map(|s| {
+                        s.chars()
+                            .filter(|c| !c.is_control())
+                            .take(max)
+                            .collect::<String>()
+                    })
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty())
+                };
+                let kind = FlowKind::Request {
+                    vault_id: v.id().to_owned(),
+                    key,
+                    description: clean(description, 200),
+                    reason: clean(reason, 500),
+                };
+                self.start_flow(v.path, kind, "request")
+            }
             Request::FlowStatus { flow_id } => {
                 self.reap();
                 let st = self.lock_state();
@@ -487,6 +547,74 @@ impl Daemon {
                     max_duration_secs: MAX_DURATION.as_secs(),
                 })
             }
+            FlowKind::Edit { .. } => {
+                let v = load_vault(&flow.vault_path)?;
+                proto::FlowInfo::Edit(proto::EditInfo {
+                    vault: summary(&v),
+                    rp_id,
+                    challenge,
+                    passkeys: passkey_descriptors(&v),
+                })
+            }
+            FlowKind::Request {
+                key,
+                description,
+                reason,
+                ..
+            } => {
+                let v = load_vault(&flow.vault_path)?;
+                proto::FlowInfo::Request(proto::RequestInfo {
+                    vault: summary(&v),
+                    key: key.clone(),
+                    description: description.clone(),
+                    reason: reason.clone(),
+                })
+            }
+        })
+    }
+
+    /// Applies editor changes atomically. Needs an editor session whose
+    /// passkey check succeeded.
+    pub fn apply_edit(
+        &self,
+        token: &str,
+        ops: Vec<proto::EditOp>,
+    ) -> Result<proto::EditResult, Fail> {
+        self.reap();
+        self.touch();
+        let mut st = self.lock_state();
+        let flow = st.flows.get_mut(token).ok_or_else(|| {
+            Fail::new(
+                ErrorCode::NotFound,
+                "the editor session has ended; run `agentpass edit` again",
+            )
+        })?;
+        let FlowKind::Edit {
+            vault_id,
+            key: Some(key),
+            changes,
+        } = &mut flow.kind
+        else {
+            return Err(Fail::invalid("confirm with your passkey first"));
+        };
+        let mut v = load_vault(&flow.vault_path)?;
+        if v.id() != vault_id {
+            return Err(Fail::internal("the vault file changed identity"));
+        }
+        let n = edit::apply(&mut v, key, ops)?;
+        v.save()?;
+        *changes += n;
+        // Editing keeps the session alive.
+        flow.created = Instant::now();
+        let message = format!(
+            "Saved {n} change{} to {}",
+            if n == 1 { "" } else { "s" },
+            v.name()
+        );
+        log!("{message}");
+        Ok(proto::EditResult {
+            message,
+            vault: summary(&v),
         })
     }
 
@@ -506,7 +634,7 @@ impl Daemon {
         })?;
         flow.attempts += 1;
         let attempts = flow.attempts;
-        let result = match completion {
+        let result: Result<Step, Fail> = match completion {
             proto::FlowCompletion::Registered {
                 credential_id,
                 prf_output,
@@ -515,6 +643,7 @@ impl Daemon {
                 let prf = decode_prf(&prf_output)?;
                 validate_credential_id(&credential_id)?;
                 complete_registration(&mut st, token, &credential_id, &prf, label)
+                    .map(|m| Step::Finished(m, None))
             }
             proto::FlowCompletion::Unlocked {
                 credential_id,
@@ -523,43 +652,188 @@ impl Daemon {
             } => {
                 let prf = decode_prf(&prf_output)?;
                 complete_unlock(&mut st, token, &credential_id, &prf, duration_secs)
+                    .map(|m| Step::Finished(m, None))
             }
+            proto::FlowCompletion::EditAuth {
+                credential_id,
+                prf_output,
+            } => {
+                let prf = decode_prf(&prf_output)?;
+                edit_auth(&mut st, token, &credential_id, &prf)
+            }
+            proto::FlowCompletion::EditClosed => match &st.flows[token].kind {
+                FlowKind::Edit { changes, .. } => Ok(Step::Finished(
+                    format!(
+                        "Editor closed ({changes} change{} saved)",
+                        if *changes == 1 { "" } else { "s" }
+                    ),
+                    Some(changes.to_string()),
+                )),
+                _ => Err(Fail::invalid("this link is not an editor")),
+            },
+            proto::FlowCompletion::Provided {
+                key,
+                description,
+                mut value,
+                replace,
+            } => {
+                let r = provide_secret(&st, token, &key, description, &value, replace);
+                zeroize::Zeroize::zeroize(&mut value);
+                r
+            }
+            proto::FlowCompletion::Declined => match &st.flows[token].kind {
+                FlowKind::Request { key, .. } => Err(Fail::new(
+                    ErrorCode::Declined,
+                    format!("the user declined to provide {key}"),
+                )),
+                _ => Err(Fail::invalid("nothing to decline")),
+            },
         };
         let flow_id = st.flows.get(token).map(|f| f.id.clone());
-        match &result {
-            Ok(message) => {
+        match result {
+            Ok(Step::Finished(message, detail)) => {
                 if let Some(f) = st.flows.remove(token) {
                     st.results.insert(
                         f.id,
                         (
                             FlowState::Done {
                                 message: message.clone(),
+                                detail,
                             },
                             Instant::now(),
                         ),
                     );
                 }
                 log!("{message}");
+                Ok(message)
             }
-            Err(e) if attempts >= FLOW_MAX_ATTEMPTS || e.code == ErrorCode::Internal => {
-                st.flows.remove(token);
-                if let Some(id) = flow_id {
-                    st.results.insert(
-                        id,
-                        (
-                            FlowState::Failed {
-                                message: e.message.clone(),
-                            },
-                            Instant::now(),
-                        ),
-                    );
+            Ok(Step::Continue(message)) => {
+                if let Some(f) = st.flows.get_mut(token) {
+                    f.attempts = 0;
+                    f.created = Instant::now();
                 }
-                log!("flow failed: {}", e.message);
+                log!("{message}");
+                Ok(message)
             }
-            Err(e) => log!("flow attempt {attempts} rejected: {}", e.message),
+            Err(e) => {
+                let terminal = attempts >= FLOW_MAX_ATTEMPTS
+                    || matches!(e.code, ErrorCode::Internal | ErrorCode::Declined);
+                if terminal {
+                    st.flows.remove(token);
+                    if let Some(id) = flow_id {
+                        st.results.insert(
+                            id,
+                            (
+                                FlowState::Failed {
+                                    message: e.message.clone(),
+                                },
+                                Instant::now(),
+                            ),
+                        );
+                    }
+                    log!("flow failed: {}", e.message);
+                } else {
+                    log!("flow attempt {attempts} rejected: {}", e.message);
+                }
+                Err(e)
+            }
         }
-        result
     }
+}
+
+fn passkey_descriptors(v: &Vault) -> Vec<proto::PasskeyDescriptor> {
+    v.file
+        .passkeys
+        .iter()
+        .map(|p| proto::PasskeyDescriptor {
+            label: p.label.clone(),
+            credential_id: p.credential_id.clone(),
+            prf_salt: p.prf_salt.clone(),
+        })
+        .collect()
+}
+
+/// Checks a passkey for an editor session and keeps the vault key in the
+/// session (not in the unlocked set: agents gain nothing).
+fn edit_auth(st: &mut State, token: &str, credential_id: &str, prf: &[u8]) -> Result<Step, Fail> {
+    let flow = &st.flows[token];
+    let FlowKind::Edit {
+        vault_id,
+        key: None,
+        ..
+    } = &flow.kind
+    else {
+        return Err(Fail::invalid(
+            "this link is not an editor, or it is already open",
+        ));
+    };
+    let v = load_vault(&flow.vault_path)?;
+    if v.id() != vault_id {
+        return Err(Fail::internal("the vault file changed identity"));
+    }
+    let pk = v
+        .passkey(credential_id)
+        .ok_or_else(|| Fail::invalid("this passkey is not enrolled in the vault"))?;
+    let unwrapped = crypto::unwrap_private_key(
+        &pk.wrapped_private_key,
+        prf,
+        vault_id,
+        credential_id,
+        &v.public_key()?,
+    )
+    .map_err(|_| {
+        Fail::invalid("the passkey did not unlock this vault (wrong passkey or PRF output)")
+    })?;
+    let label = pk.label.clone();
+    if let Some(Flow {
+        kind: FlowKind::Edit { key, .. },
+        ..
+    }) = st.flows.get_mut(token)
+    {
+        *key = Some(unwrapped);
+    }
+    Ok(Step::Continue(format!(
+        "Editor opened for vault {} with \"{label}\"",
+        v.name()
+    )))
+}
+
+fn provide_secret(
+    st: &State,
+    token: &str,
+    key: &str,
+    description: Option<String>,
+    value: &str,
+    replace: bool,
+) -> Result<Step, Fail> {
+    let flow = &st.flows[token];
+    let FlowKind::Request { vault_id, .. } = &flow.kind else {
+        return Err(Fail::invalid("this link does not request a secret"));
+    };
+    vault::validate_key_name(key).map_err(|e| Fail::invalid(e.to_string()))?;
+    if value.is_empty() {
+        return Err(Fail::invalid("the value is empty"));
+    }
+    let mut v = load_vault(&flow.vault_path)?;
+    if v.id() != vault_id {
+        return Err(Fail::internal("the vault file changed identity"));
+    }
+    let existed = v.file.secrets.contains_key(key);
+    if existed && !replace {
+        return Err(Fail::invalid(format!(
+            "{key} already exists; tick \"replace\" to overwrite it"
+        )));
+    }
+    v.set_secret(key, value.as_bytes(), Some(description.unwrap_or_default()))?;
+    v.save()?;
+    Ok(Step::Finished(
+        format!(
+            "{} {key} in vault {}",
+            if existed { "Replaced" } else { "Stored" },
+            v.name()
+        ),
+        Some(key.to_owned()),
+    ))
 }
 
 fn token_short() -> Result<String, Fail> {
@@ -696,9 +970,9 @@ fn complete_registration(
             v.save()?;
             Ok(format!("Added passkey \"{label}\" to vault {}", v.name()))
         }
-        FlowKind::Unlock { .. } => Err(Fail::invalid(
-            "this link is for unlocking, not registration",
-        )),
+        FlowKind::Unlock { .. } | FlowKind::Edit { .. } | FlowKind::Request { .. } => {
+            Err(Fail::invalid("this link is not for registering a passkey"))
+        }
     }
 }
 

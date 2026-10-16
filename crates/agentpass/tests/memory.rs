@@ -127,7 +127,7 @@ fn key_lives_only_in_locked_nodump_memory_and_is_wiped_on_lock() {
     let mut sb = Sandbox::new();
     let pid = sb.start_daemon();
     let secret = b"plaintext-canary-7f3a9c1e5b2d4086";
-    assert!(sb.run(&["set", "CANARY"], Some(secret)).status.success());
+    sb.put("CANARY", secret, None);
 
     assert!(scan(pid, &sb.key).is_empty(), "key in memory before unlock");
     sb.unlock(None);

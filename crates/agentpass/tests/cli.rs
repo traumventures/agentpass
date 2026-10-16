@@ -14,8 +14,7 @@ fn full_cycle_through_the_real_daemon() {
     let mut sb = Sandbox::new();
     sb.start_daemon();
 
-    let out = sb.run(&["set", "DB_PASSWORD", "-d", "postgres"], Some(b"pa55\n"));
-    assert!(out.status.success());
+    sb.put("DB_PASSWORD", b"pa55", Some("postgres"));
     let toml = std::fs::read_to_string(sb.vault()).unwrap();
     assert!(toml.contains("[secrets.DB_PASSWORD]") && !toml.contains("pa55"));
 
@@ -32,13 +31,12 @@ fn full_cycle_through_the_real_daemon() {
     );
     assert_eq!(code(&sb.run(&["wait", "--timeout", "1s"], None)), 0);
 
-    // `set` while unlocked works too, and new values are readable at once.
-    assert!(sb.run(&["set", "NEW"], Some(b"v2")).status.success());
+    // Secrets added while unlocked are readable at once.
+    sb.put("NEW", b"v2", None);
     assert_eq!(sb.run(&["get", "NEW"], None).stdout, b"v2");
-
-    // rm, list
-    assert!(sb.run(&["rm", "NEW"], None).status.success());
-    assert_eq!(code(&sb.run(&["rm", "NEW"], None)), 4);
+    let mut v = agentpass::vault::Vault::load(&sb.vault()).unwrap();
+    v.file.secrets.remove("NEW");
+    v.save().unwrap();
     let list = sb.run(&["list", "--json"], None);
     let list: serde_json::Value = serde_json::from_slice(&list.stdout).unwrap();
     assert_eq!(
@@ -77,7 +75,7 @@ fn wrong_prf_is_rejected_and_link_is_single_use() {
 fn timed_unlock_expires() {
     let mut sb = Sandbox::new();
     sb.start_daemon();
-    assert!(sb.run(&["set", "K"], Some(b"v")).status.success());
+    sb.put("K", b"v", None);
     sb.unlock(Some(1));
     assert_eq!(sb.run(&["get", "K"], None).stdout, b"v");
     std::thread::sleep(std::time::Duration::from_millis(1600));
@@ -85,16 +83,11 @@ fn timed_unlock_expires() {
 }
 
 #[test]
-fn large_values_roundtrip_and_oversized_values_are_refused() {
+fn large_values_roundtrip() {
     let mut sb = Sandbox::new();
     sb.start_daemon();
     let big: Vec<u8> = (0..300_000u32).map(|i| (i * 7 % 251) as u8).collect();
-    assert!(sb
-        .run(&["set", "BIG", "--raw"], Some(&big))
-        .status
-        .success());
-    let too_big = vec![b'x'; agentpass::crypto::MAX_VALUE_LEN + 1];
-    assert_eq!(code(&sb.run(&["set", "HUGE"], Some(&too_big))), 2);
+    sb.put("BIG", &big, None);
     sb.unlock(Some(60));
     assert_eq!(sb.run(&["get", "BIG"], None).stdout, big);
 }
@@ -153,15 +146,9 @@ fn several_vaults_require_file() {
 fn folder_secrets_work_with_get_and_run() {
     let mut sb = Sandbox::new();
     sb.start_daemon();
-    assert!(sb
-        .run(&["set", "production/DB_PASSWORD"], Some(b"prod-pw"))
-        .status
-        .success());
-    assert!(sb
-        .run(&["set", "testing/DB_PASSWORD"], Some(b"test-pw"))
-        .status
-        .success());
-    assert_eq!(code(&sb.run(&["set", "bad//name"], Some(b"x"))), 2);
+    sb.put("production/DB_PASSWORD", b"prod-pw", None);
+    sb.put("testing/DB_PASSWORD", b"test-pw", None);
+    assert_eq!(code(&sb.run(&["request", "bad//name"], None)), 2);
     sb.unlock(Some(60));
     assert_eq!(
         sb.run(&["get", "testing/DB_PASSWORD"], None).stdout,
@@ -306,4 +293,144 @@ fn skill_is_printed_and_installed() {
     let out = run(&["init-skill"]);
     assert_eq!(code(&out), 1);
     assert!(String::from_utf8_lossy(&out.stderr).contains("--tool"));
+}
+
+#[test]
+fn there_is_no_cli_command_to_write_secrets() {
+    let sb = Sandbox::new();
+    for cmd in ["set", "rm", "add", "put"] {
+        let out = sb.run(&[cmd, "K"], Some(b"v"));
+        assert_eq!(code(&out), 2, "`{cmd}` must not exist");
+    }
+}
+
+/// Starts a browser flow command and returns (child, link).
+fn start_flow(sb: &Sandbox, args: &[&str]) -> (std::process::Child, String) {
+    use std::io::BufRead;
+    let mut child = sb
+        .cmd(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.as_mut().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert!(line.starts_with("http://localhost:"), "{line}");
+    (child, line.trim().to_owned())
+}
+
+#[test]
+fn request_lets_the_user_rename_and_reports_the_final_name() {
+    let mut sb = Sandbox::new();
+    sb.start_daemon();
+    let (child, url) = start_flow(
+        &sb,
+        &[
+            "request",
+            "STRIPE_KEY",
+            "-d",
+            "Stripe",
+            "--reason",
+            "deploy",
+            "--timeout",
+            "30s",
+        ],
+    );
+    let body = serde_json::json!({
+        "kind": "provided",
+        "key": "production/STRIPE_SECRET",
+        "description": "live key",
+        "value": "sk_live_123",
+    });
+    let (status, resp) = common::http_complete(&url, &body.to_string());
+    assert_eq!(status, 200, "{resp}");
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.stdout, b"production/STRIPE_SECRET\n");
+    let toml = std::fs::read_to_string(sb.vault()).unwrap();
+    assert!(toml.contains("description = \"live key\"") && !toml.contains("sk_live_123"));
+    sb.unlock(Some(60));
+    assert_eq!(
+        sb.run(&["get", "production/STRIPE_SECRET"], None).stdout,
+        b"sk_live_123"
+    );
+}
+
+#[test]
+fn request_refuses_silent_overwrite_and_can_be_declined() {
+    let mut sb = Sandbox::new();
+    sb.start_daemon();
+    sb.put("K", b"old", None);
+    let (child, url) = start_flow(&sb, &["request", "K", "--timeout", "30s"]);
+    let body = |replace: bool| {
+        serde_json::json!({ "kind": "provided", "key": "K", "value": "new", "replace": replace })
+            .to_string()
+    };
+    assert_eq!(common::http_complete(&url, &body(false)).0, 400);
+    let (status, _) = common::http_complete(&url, r#"{"kind":"declined"}"#);
+    assert_eq!(status, 200);
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(code(&out), 1);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("declined"));
+    assert!(out.stdout.is_empty());
+}
+
+#[test]
+fn editor_needs_the_passkey_then_applies_changes_atomically() {
+    let mut sb = Sandbox::new();
+    sb.start_daemon();
+    sb.put("prod/A", b"a", Some("first"));
+    sb.put("B", b"b", None);
+    let (child, url) = start_flow(&sb, &["edit", "--timeout", "30s"]);
+    let ops = |ops: serde_json::Value| serde_json::json!({ "ops": ops }).to_string();
+    let rename = ops(serde_json::json!([
+        { "op": "rename", "from": "prod/A", "to": "production/A" },
+        { "op": "delete", "key": "B" },
+        { "op": "put", "key": "production/C", "value": "c", "description": "new" },
+    ]));
+    // Before the passkey check nothing can be changed.
+    assert_eq!(common::http_post(&url, "/api/edit", &rename).0, 400);
+    let auth = serde_json::json!({
+        "kind": "edit_auth",
+        "credential_id": common::CRED,
+        "prf_output": agentpass::crypto::b64url(&common::PRF),
+    });
+    assert_eq!(common::http_complete(&url, &auth.to_string()).0, 200);
+    // Opening the editor does not unlock the vault for agents.
+    assert_eq!(code(&sb.run(&["get", "B"], None)), 3);
+    // A failing batch changes nothing.
+    let bad = ops(serde_json::json!([
+        { "op": "delete", "key": "B" },
+        { "op": "delete", "key": "NOPE" },
+    ]));
+    assert_eq!(common::http_post(&url, "/api/edit", &bad).0, 400);
+    let (status, resp) = common::http_post(&url, "/api/edit", &rename);
+    assert_eq!(status, 200, "{resp}");
+    assert_eq!(
+        common::http_complete(&url, r#"{"kind":"edit_closed"}"#).0,
+        200
+    );
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    sb.unlock(Some(60));
+    assert_eq!(sb.run(&["get", "production/A"], None).stdout, b"a");
+    assert_eq!(sb.run(&["get", "production/C"], None).stdout, b"c");
+    assert_eq!(code(&sb.run(&["get", "B"], None)), 4);
+    let v = agentpass::vault::Vault::load(&sb.vault()).unwrap();
+    assert_eq!(
+        v.file.secrets["production/A"].description.as_deref(),
+        Some("first")
+    );
 }

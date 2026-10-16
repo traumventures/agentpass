@@ -19,6 +19,17 @@ async function setupVault(page, ap, label = "Virtual key") {
   expect(res.code, res.stderr).toBe(0);
 }
 
+/** The agent requests a secret; the user fills it in on the request page. */
+async function provideVia(page, ap, args, fill) {
+  const req = ap.start(["request", ...args, "--timeout", "60s"]);
+  await page.goto(await req.url);
+  await expect(page.getByRole("heading", { name: "Secret requested" })).toBeVisible();
+  await fill(page);
+  await page.getByRole("button", { name: "Save secret" }).click();
+  await expect(page.getByRole("heading", { name: "All set" })).toBeVisible();
+  return req.done;
+}
+
 async function unlockVia(page, ap, args, choose) {
   const unlock = await ap.run(["unlock", ...args]);
   expect(unlock.code, unlock.stderr).toBe(0);
@@ -41,19 +52,26 @@ test("setup, set, unlock with a chosen duration, get, run, lock", async ({ page 
     expect(toml).toContain('label = "Virtual key"');
     expect(toml).toContain('name = "e2e"');
 
-    let r = await ap.run(["set", "GITHUB_TOKEN", "-d", "CI token"], { input: "ghp_e2e_secret\n" });
+    // The agent suggests a name; the user moves it into a folder.
+    let r = await provideVia(page, ap, ["GITHUB_TOKEN", "-d", "CI token", "--reason", "push the release"], async (p) => {
+      await expect(p.getByText("push the release")).toBeVisible();
+      await expect(p.getByLabel("Name", { exact: true })).toHaveValue("GITHUB_TOKEN");
+      await expect(p.getByLabel("Description")).toHaveValue("CI token");
+      await p.getByLabel("Folder", { exact: true }).fill("ci");
+      await expect(p.locator(".tree-line.selected")).toContainText("GITHUB_TOKEN");
+      await p.getByLabel("Value").fill("ghp_e2e_secret");
+    });
     expect(r.code, r.stderr).toBe(0);
-    r = await ap.run(["set", "BINARY"], { input: Buffer.from([0, 1, 2, 255]) });
-    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout.trim().split("\n").pop()).toBe("ci/GITHUB_TOKEN");
     const stored = readFileSync(ap.vault, "utf8");
     expect(stored).toContain('description = "CI token"');
     expect(stored).not.toContain("ghp_e2e_secret");
 
     r = await ap.run(["list"]);
-    expect(r.stdout).toMatch(/GITHUB_TOKEN\s+CI token/);
+    expect(r.stdout).toMatch(/ci\/GITHUB_TOKEN\s+CI token/);
 
     // Locked: get fails with exit code 3, wait times out with 5.
-    r = await ap.run(["get", "GITHUB_TOKEN"]);
+    r = await ap.run(["get", "ci/GITHUB_TOKEN"]);
     expect(r.code).toBe(EXIT_LOCKED);
     r = await ap.run(["wait", "--timeout", "1s"]);
     expect(r.code).toBe(EXIT_TIMEOUT);
@@ -78,16 +96,16 @@ test("setup, set, unlock with a chosen duration, get, run, lock", async ({ page 
     expect(status.expires_in_secs).toBeGreaterThan(14 * 60);
     expect(status.expires_in_secs).toBeLessThanOrEqual(15 * 60);
 
-    r = await ap.run(["get", "GITHUB_TOKEN"]);
+    r = await ap.run(["get", "ci/GITHUB_TOKEN"]);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toBe("ghp_e2e_secret");
     r = await ap.run(["get", "NOPE"]);
     expect(r.code).toBe(EXIT_NOT_FOUND);
 
-    r = await ap.run(["run", "-e", "GH=GITHUB_TOKEN", "--", "sh", "-c", 'printf "%s" "$GH"']);
+    r = await ap.run(["run", "-e", "GH=ci/GITHUB_TOKEN", "--", "sh", "-c", 'printf "%s" "$GH"']);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toBe("ghp_e2e_secret");
-    r = await ap.run(["run", "-e", "GITHUB_TOKEN", "--", "sh", "-c", "exit 7"]);
+    r = await ap.run(["run", "-e", "ci/GITHUB_TOKEN", "--", "sh", "-c", "exit 7"]);
     expect(r.code).toBe(7);
 
     // Already unlocked: no new link.
@@ -97,7 +115,7 @@ test("setup, set, unlock with a chosen duration, get, run, lock", async ({ page 
 
     r = await ap.run(["lock"]);
     expect(r.code).toBe(0);
-    r = await ap.run(["get", "GITHUB_TOKEN"]);
+    r = await ap.run(["get", "ci/GITHUB_TOKEN"]);
     expect(r.code).toBe(EXIT_LOCKED);
   } finally {
     await ap.cleanup();
@@ -109,7 +127,7 @@ test("until locked, backup passkey enrollment and removal", async ({ page }) => 
   try {
     const first = await virtualAuthenticator(page);
     await setupVault(page, ap, "Primary");
-    await ap.run(["set", "API_KEY"], { input: "k-123" });
+    await provideVia(page, ap, ["API_KEY"], (p) => p.getByLabel("Value").fill("k-123"));
 
     await unlockVia(page, ap, ["--suggest", "forever"], async (p) => {
       await expect(p.getByText("Your agent suggested: until locked")).toBeVisible();
@@ -202,6 +220,55 @@ test("web server rejects foreign origins, hosts and missing tokens", async ({ pa
     // A link without its token explains itself.
     await page.goto(`${base}/unlock`);
     await expect(page.getByText("needs the full link")).toBeVisible();
+  } finally {
+    await ap.cleanup();
+  }
+});
+
+test("secrets editor: passkey, add, rename folder, delete, save", async ({ page }) => {
+  const ap = await sandbox();
+  try {
+    await virtualAuthenticator(page);
+    await setupVault(page, ap);
+    await provideVia(page, ap, ["prod/DB_PASSWORD"], (p) => p.getByLabel("Value").fill("db-1"));
+    await provideVia(page, ap, ["OLD_TOKEN"], (p) => p.getByLabel("Value").fill("old"));
+
+    const edit = ap.start(["edit", "--timeout", "60s"]);
+    await page.goto(await edit.url);
+    await page.getByRole("button", { name: "Open editor with passkey" }).click();
+    await expect(page.getByRole("button", { name: "+ secret" })).toBeVisible();
+
+    // Add a secret in a new folder.
+    await page.getByRole("button", { name: "+ secret" }).click();
+    await page.getByLabel("Folder", { exact: true }).fill("testing");
+    await page.getByLabel("Name", { exact: true }).fill("DB_PASSWORD");
+    await page.getByLabel("Value").fill("db-test");
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    // Rename folder prod -> production.
+    await page.locator(".tree-line.folder", { hasText: "prod/" }).click();
+    await page.getByLabel("Rename / move to").fill("production");
+    await page.getByRole("button", { name: "Rename", exact: true }).click();
+    // Delete a secret.
+    await page.locator(".tree-line", { hasText: "OLD_TOKEN" }).click();
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(page.getByText("3 unsaved changes")).toBeVisible();
+    await page.getByRole("button", { name: "> Save", exact: true }).click();
+    await expect(page.getByText("Saved 3 changes")).toBeVisible();
+    await page.getByRole("button", { name: /Done: close editor/ }).click();
+    await expect(page.getByRole("heading", { name: "All set" })).toBeVisible();
+    let r = await edit.done;
+    expect(r.code, r.stderr).toBe(0);
+
+    r = await ap.run(["list", "--json"]);
+    expect(JSON.parse(r.stdout).map((s) => s.key)).toEqual(["production/DB_PASSWORD", "testing/DB_PASSWORD"]);
+    // Editing did not unlock the vault for agents.
+    r = await ap.run(["get", "production/DB_PASSWORD"]);
+    expect(r.code).toBe(EXIT_LOCKED);
+    await unlockVia(page, ap, []);
+    r = await ap.run(["get", "production/DB_PASSWORD"]);
+    expect(r.stdout).toBe("db-1");
+    r = await ap.run(["get", "testing/DB_PASSWORD"]);
+    expect(r.stdout).toBe("db-test");
   } finally {
     await ap.cleanup();
   }

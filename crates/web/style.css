@@ -48,7 +48,7 @@ code { font: inherit; color: var(--accent); word-break: break-all; }
 
 .vault {
   display: grid; grid-template-columns: auto 1fr; gap: .25rem 1rem;
-  border: 1px dashed var(--line-strong); border-bottom: 0; padding: .75rem 1rem; margin: 0 0 .5rem;
+  border: 1px dashed var(--line-strong); padding: .75rem 1rem; margin: 0 0 1.25rem;
 }
 .vault dt { color: var(--muted); text-transform: lowercase; }
 .vault dt::after { content: ":"; }
@@ -60,10 +60,10 @@ code { font: inherit; color: var(--accent); word-break: break-all; }
   display: block; font-size: .8rem; margin-bottom: .4rem; padding: 0;
   text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
 }
-input[type=text], input[type=number], select {
+input[type=text], input[type=password], input[type=number], select {
   font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line-strong); padding: .45rem .6rem;
 }
-input[type=text] { width: 100%; }
+input[type=text], input[type=password] { width: 100%; }
 input:focus, select:focus { outline: none; border-color: var(--accent); }
 button:focus-visible, .chip:focus-within { outline: 1px solid var(--accent); outline-offset: 2px; }
 fieldset { border: 0; padding: 0; margin: 0 0 1.25rem; }
@@ -93,10 +93,49 @@ button.primary:disabled { opacity: .5; cursor: progress; }
 .check { color: var(--accent); font-weight: 700; margin-bottom: .75rem; }
 
 .tree {
-  border: 1px dashed var(--line-strong); padding: .75rem 1rem; margin: -.5rem 0 1.25rem;
+  border: 1px dashed var(--line-strong); padding: .75rem 1rem; margin: 0 0 1.25rem;
   white-space: pre; overflow-x: auto; line-height: 1.5;
 }
 .tree-prefix { color: var(--line-strong); }
 .tree-line.folder .tree-label { color: var(--accent); font-weight: 700; }
 .tree-desc { color: var(--muted); }
 .tree-summary { margin-top: .5rem; font-size: .8rem; }
+
+/* ---- editor / request ---- */
+main.wide { max-width: 52rem; }
+h2 { font-size: .85rem; margin: 0 0 .75rem; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
+h2::before { content: "## "; color: var(--muted); }
+.btn {
+  font: inherit; font-size: .85rem; cursor: pointer; color: var(--text); background: var(--bg);
+  border: 1px solid var(--line-strong); padding: .35rem .75rem;
+}
+.btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.danger:hover:not(:disabled) { border-color: var(--error); color: var(--error); }
+.btn.ghost { border-style: dashed; }
+.btn.wide { width: 100%; margin-top: .6rem; padding: .55rem; }
+.toolbar, .actions { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .6rem; }
+.actions { margin: .25rem 0 0; }
+.panel { border: 1px solid var(--line-strong); padding: 1rem; margin: 0 0 1rem; background: var(--bg); }
+.panel .field { margin-bottom: .8rem; }
+.form .field small { word-break: break-all; }
+.error-text { color: var(--error); }
+.savebar { display: flex; align-items: center; gap: .5rem; border-top: 1px dashed var(--line-strong); padding-top: .8rem; }
+.savebar > span { flex: 1; font-size: .8rem; }
+button.primary.small { width: auto; padding: .45rem 1.2rem; box-shadow: 3px 3px 0 #000; }
+.notice { color: var(--accent); border: 1px solid var(--accent); padding: .5rem .75rem; }
+.notice::before { content: "OK "; font-weight: 700; }
+.reason { border-left: 2px solid var(--accent); padding-left: .75rem; color: var(--text); font-style: italic; }
+.check-line { display: block; margin: 0 0 1rem; cursor: pointer; color: var(--error); }
+.tree.interactive .tree-line { cursor: pointer; }
+.tree.interactive .tree-line:hover .tree-label { text-decoration: underline; }
+.tree-line.selected { background: var(--accent); color: #000; }
+.tree-line.selected .tree-label, .tree-line.selected .tree-desc, .tree-line.selected .tree-prefix { color: #000; }
+.tree-line.deleted .tree-label { text-decoration: line-through; color: var(--muted); }
+.mark-new { color: var(--accent); font-weight: 700; }
+.mark-changed { color: #ffbd2e; font-weight: 700; }
+.mark-deleted { color: var(--error); }
+.tree-line.selected .mark-new, .tree-line.selected .mark-changed { color: #000; }
+
+/* tree directly under the vault box: join them */
+.vault + .tree { margin-top: calc(-1.25rem - 1px); }

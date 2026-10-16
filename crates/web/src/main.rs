@@ -1,10 +1,12 @@
-//! agentpass web UI: passkey registration (setup / enroll) and unlocking.
+//! agentpass web UI: passkey registration (setup / enroll), unlocking, the
+//! secrets editor and secret requests.
 //!
 //! The one-time flow token arrives in the URL fragment, is removed from the
 //! address bar immediately and is sent to the daemon in a header.
 
 mod api;
 mod duration;
+mod editor;
 mod tree;
 mod webauthn;
 
@@ -84,14 +86,21 @@ fn app() -> Html {
             FlowInfo::Enroll(info) => html! {
                 <Register info={info.clone()} token={token.clone()} on_done={on_done.clone()} setup=false />
             },
+            FlowInfo::Edit(info) => html! {
+                <editor::Editor info={info.clone()} token={token.clone()} on_done={on_done.clone()} />
+            },
+            FlowInfo::Request(info) => html! {
+                <editor::RequestView info={info.clone()} token={token.clone()} on_done={on_done.clone()} />
+            },
             FlowInfo::Unlock(info) => html! {
                 <Unlock info={info.clone()} token={token.clone()} on_done={on_done.clone()} />
             },
         },
     };
 
+    let wide = matches!(&*phase, Phase::Ready(f) if matches!(**f, FlowInfo::Edit(_)));
     html! {
-        <main>
+        <main class={classes!(wide.then_some("wide"))}>
             <header class="brand">
                 <span class="logo" aria-hidden="true">{ "🔐" }</span>
                 <span>{ "agentpass" }</span>
@@ -106,12 +115,15 @@ fn app() -> Html {
 }
 
 #[derive(Properties, PartialEq)]
-struct VaultCardProps {
-    vault: VaultSummary,
+pub struct VaultCardProps {
+    pub vault: VaultSummary,
+    /// Also draw the read-only secrets tree.
+    #[prop_or(true)]
+    pub tree: bool,
 }
 
 #[function_component(VaultCard)]
-fn vault_card(props: &VaultCardProps) -> Html {
+pub fn vault_card(props: &VaultCardProps) -> Html {
     let v = &props.vault;
     html! {
         <>
@@ -119,7 +131,7 @@ fn vault_card(props: &VaultCardProps) -> Html {
             <dt>{ "Vault" }</dt><dd><strong>{ &v.name }</strong></dd>
             <dt>{ "File" }</dt><dd><code>{ &v.path }</code></dd>
         </dl>
-        if !v.vault_id.is_empty() {
+        if props.tree && !v.vault_id.is_empty() {
             <tree::SecretsTree secrets={v.secrets.clone()} />
         }
         </>
@@ -316,5 +328,15 @@ fn unlock(props: &UnlockProps) -> Html {
 }
 
 fn main() {
+    // A new link in the same tab only changes the fragment: start over.
+    if let Some(window) = web_sys::window() {
+        let reload = wasm_bindgen::closure::Closure::<dyn Fn()>::new(|| {
+            if let Some(w) = web_sys::window() {
+                let _ = w.location().reload();
+            }
+        });
+        window.set_onhashchange(Some(wasm_bindgen::JsCast::unchecked_ref(reload.as_ref())));
+        reload.forget();
+    }
     yew::Renderer::<App>::new().render();
 }

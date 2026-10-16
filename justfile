@@ -8,6 +8,7 @@ build:
 
 # Build the Yew web UI into crates/agentpass/ui (committed) and record its source hash.
 web:
+    rm -rf crates/agentpass/ui target/wasm-bindgen
     cd crates/web && trunk build --release
     AGENTPASS_WRITE_UI_HASH=1 cargo check -q -p agentpass
 

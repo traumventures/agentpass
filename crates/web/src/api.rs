@@ -1,6 +1,8 @@
 //! Calls to the daemon's JSON API.
 
-use agentpass_protocol::{ApiError, FlowCompletion, FlowInfo, FlowResult, TOKEN_HEADER};
+use agentpass_protocol::{
+    ApiError, EditOp, EditRequest, EditResult, FlowCompletion, FlowInfo, FlowResult, TOKEN_HEADER,
+};
 use gloo_net::http::{Request, Response};
 
 async fn error_of(resp: Response) -> String {
@@ -44,4 +46,20 @@ pub async fn complete(token: &str, body: &FlowCompletion) -> Result<String, Stri
         .await
         .map_err(|e| format!("Unexpected response: {e}"))?;
     Ok(result.message)
+}
+
+pub async fn edit(token: &str, ops: Vec<EditOp>) -> Result<EditResult, String> {
+    let resp = Request::post("/api/edit")
+        .header(TOKEN_HEADER, token)
+        .json(&EditRequest { ops })
+        .map_err(|e| e.to_string())?
+        .send()
+        .await
+        .map_err(network)?;
+    if !resp.ok() {
+        return Err(error_of(resp).await);
+    }
+    resp.json()
+        .await
+        .map_err(|e| format!("Unexpected response: {e}"))
 }

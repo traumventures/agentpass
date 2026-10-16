@@ -58,6 +58,14 @@ impl Sandbox {
         }
     }
 
+    /// Stores a secret directly (what the browser editor ends up doing).
+    pub fn put(&self, key: &str, value: &[u8], description: Option<&str>) {
+        let mut v = vault::Vault::load(&self.vault()).unwrap();
+        v.set_secret(key, value, description.map(str::to_owned))
+            .unwrap();
+        v.save().unwrap();
+    }
+
     pub fn vault(&self) -> PathBuf {
         self.dir.path().join("secrets.agentpass.toml")
     }
@@ -135,6 +143,12 @@ impl Sandbox {
 /// daemon that issued it. The port comes from the link because the daemon
 /// falls back to a random port when the requested one is taken.
 pub fn http_complete(url: &str, body: &str) -> (u16, String) {
+    http_post(url, "/api/flow/complete", body)
+}
+
+/// POSTs `body` to `path` on the daemon behind the link `url`, with the
+/// link's token, like the web UI does.
+pub fn http_post(url: &str, path: &str, body: &str) -> (u16, String) {
     let url = url.trim();
     let (base, token) = url.split_once('#').expect("link has a token");
     let port: u16 = base
@@ -147,7 +161,7 @@ pub fn http_complete(url: &str, body: &str) -> (u16, String) {
     let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
     write!(
         s,
-        "POST /api/flow/complete HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\n\
+        "POST {path} HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\n\
          x-agentpass-token: {token}\r\nContent-Type: application/json\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()

@@ -1,6 +1,6 @@
 //! Bindings to `js/webauthn.js` (navigator.credentials + PRF extension).
 
-use agentpass_protocol::{RegisterInfo, UnlockInfo};
+use agentpass_protocol::RegisterInfo;
 use serde::Deserialize;
 use wasm_bindgen::prelude::*;
 
@@ -53,7 +53,9 @@ pub async fn register(info: &RegisterInfo) -> Result<PrfResult, String> {
     parse(register_passkey(opts).await.map_err(explain)?)
 }
 
-pub async fn evaluate(info: &UnlockInfo) -> Result<PrfResult, String> {
+/// Passkey assertion with PRF; `info` needs `rp_id`, `challenge` and
+/// `passkeys` (UnlockInfo or EditInfo).
+pub async fn evaluate(info: &impl serde::Serialize) -> Result<PrfResult, String> {
     let opts = serde_json::to_string(info).map_err(|e| e.to_string())?;
     parse(evaluate_prf(opts).await.map_err(explain)?)
 }

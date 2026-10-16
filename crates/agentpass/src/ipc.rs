@@ -36,6 +36,15 @@ pub enum Request {
         vault_path: PathBuf,
         suggest_secs: Option<u64>,
     },
+    Edit {
+        vault_path: PathBuf,
+    },
+    RequestSecret {
+        vault_path: PathBuf,
+        key: String,
+        description: Option<String>,
+        reason: Option<String>,
+    },
     FlowStatus {
         flow_id: String,
     },
@@ -87,6 +96,8 @@ pub enum ErrorCode {
     Locked,
     NotFound,
     Invalid,
+    /// The user declined a request.
+    Declined,
     Internal,
 }
 
@@ -94,8 +105,15 @@ pub enum ErrorCode {
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum FlowState {
     Pending,
-    Done { message: String },
-    Failed { message: String },
+    Done {
+        message: String,
+        /// Result for the CLI, e.g. the final name of a requested secret.
+        #[serde(default)]
+        detail: Option<String>,
+    },
+    Failed {
+        message: String,
+    },
     Expired,
 }
 

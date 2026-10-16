@@ -1,15 +1,14 @@
 //! Command-line interface.
 
 use std::ffi::OsString;
-use std::io::{IsTerminal, Read, Write};
+use std::io::{IsTerminal, Write};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use clap::{Args, Parser, Subcommand};
 
-use crate::crypto::MAX_VALUE_LEN;
 use crate::ipc::{Client, DaemonError, ErrorCode, FlowState, Request, Response, VaultStatus};
 use crate::secmem::{self, SecureBuf};
 use crate::vault::{self, Vault};
@@ -30,6 +29,9 @@ Typical agent workflow:
   agentpass run -e NPM_TOKEN -- npm publish
 
 Teach your coding agent: `agentpass init-skill` (or `agentpass skill`).
+
+Secrets are only ever added or changed in the browser: `agentpass request KEY`
+(you propose, the user fills in the value) or `agentpass edit` (the user's editor).
 
 Never capture a secret into your own context: pipe `get` straight into the
 command that needs it, or use `run` to pass it as an environment variable.
@@ -72,16 +74,27 @@ enum Command {
     /// Manage the passkeys that can unlock the vault.
     #[command(subcommand)]
     Passkey(PasskeyCommand),
-    /// Encrypt and store a secret. Works while locked. Reads the value from
-    /// stdin, or prompts for it without echo.
-    Set {
+    /// Open the secrets editor in the browser: add, change, rename and
+    /// delete secrets and folders (asks for your passkey). This is the only
+    /// way to change secrets.
+    Edit {
+        #[command(flatten)]
+        browser: BrowserArgs,
+    },
+    /// Ask the user for one secret. Opens a page where the user enters the
+    /// value and can change the suggested name, folder and description.
+    /// Blocks until done; prints the final secret name on stdout.
+    Request {
+        /// Suggested name, with folders if any (e.g. production/STRIPE_KEY).
         key: String,
-        /// Description (stored in plain text).
+        /// Suggested description.
         #[arg(short, long)]
         description: Option<String>,
-        /// Keep a trailing newline from piped input.
+        /// Why the secret is needed (shown to the user).
         #[arg(long)]
-        raw: bool,
+        reason: Option<String>,
+        #[command(flatten)]
+        browser: BrowserArgs,
     },
     /// List secret names and descriptions. Works while locked.
     #[command(alias = "ls")]
@@ -89,9 +102,6 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Remove a secret. Works while locked.
-    #[command(alias = "remove")]
-    Rm { key: String },
     /// Request an unlock: prints a link for the user to open; returns at once.
     Unlock {
         /// Suggest how long to stay unlocked (e.g. 30m, 1h, 8h, or "forever").
@@ -235,7 +245,7 @@ pub fn main() -> i32 {
                     ErrorCode::Locked => EXIT_LOCKED,
                     ErrorCode::NotFound => EXIT_NOT_FOUND,
                     ErrorCode::Invalid => EXIT_USAGE,
-                    ErrorCode::Internal => EXIT_ERROR,
+                    ErrorCode::Internal | ErrorCode::Declined => EXIT_ERROR,
                 }
             } else {
                 EXIT_ERROR
@@ -306,6 +316,7 @@ fn run(cli: Cli) -> Result<i32> {
                 &browser,
                 "create the vault and register a passkey",
             )
+            .map(|_| EXIT_OK)
         }
         Command::Passkey(PasskeyCommand::Add { label, browser }) => {
             let v = locate(vault_arg)?;
@@ -314,7 +325,7 @@ fn run(cli: Cli) -> Result<i32> {
                 vault_path: v.path.clone(),
                 label,
             })?;
-            browser_flow(&client, resp, &browser, "register an additional passkey")
+            browser_flow(&client, resp, &browser, "register an additional passkey").map(|_| EXIT_OK)
         }
         Command::Passkey(PasskeyCommand::List) => {
             let v = locate(vault_arg)?;
@@ -365,24 +376,39 @@ fn run(cli: Cli) -> Result<i32> {
                 )),
             }
         }
-        Command::Set {
+        Command::Edit { browser } => {
+            let v = locate(vault_arg)?;
+            let client = Client::connect_or_spawn()?;
+            let resp = client.request(&Request::Edit {
+                vault_path: v.path.clone(),
+            })?;
+            browser_flow(
+                &client,
+                resp,
+                &browser,
+                "edit the secrets (confirm with your passkey)",
+            )
+            .map(|_| EXIT_OK)
+        }
+        Command::Request {
             key,
             description,
-            raw,
+            reason,
+            browser,
         } => {
             vault::validate_key_name(&key).map_err(|e| exit(EXIT_USAGE, e.to_string()))?;
-            let mut v = locate(vault_arg)?;
-            secmem::harden_client();
-            let value = read_value(&key, raw)?;
-            let existed = v.file.secrets.contains_key(&key);
-            v.set_secret(&key, value.as_slice(), description)?;
-            v.save()?;
-            eprintln!(
-                "{} {key} ({} bytes, encrypted) in {}",
-                if existed { "Updated" } else { "Stored" },
-                value.len(),
-                v.path.display()
-            );
+            let v = locate(vault_arg)?;
+            let client = Client::connect_or_spawn()?;
+            let resp = client.request(&Request::RequestSecret {
+                vault_path: v.path.clone(),
+                key,
+                description,
+                reason,
+            })?;
+            let detail = browser_flow(&client, resp, &browser, "provide the secret")?;
+            if let Some(final_key) = detail {
+                println!("{final_key}");
+            }
             Ok(EXIT_OK)
         }
         Command::List { json } => {
@@ -404,15 +430,6 @@ fn run(cli: Cli) -> Result<i32> {
                     }
                 }
             }
-            Ok(EXIT_OK)
-        }
-        Command::Rm { key } => {
-            let mut v = locate(vault_arg)?;
-            if v.file.secrets.remove(&key).is_none() {
-                return Err(exit(EXIT_NOT_FOUND, format!("no secret named {key:?}")));
-            }
-            v.save()?;
-            eprintln!("Removed {key}");
             Ok(EXIT_OK)
         }
         Command::Unlock {
@@ -702,7 +719,14 @@ fn open_browser(url: &str) {
     }
 }
 
-fn browser_flow(client: &Client, resp: Response, browser: &BrowserArgs, what: &str) -> Result<i32> {
+/// Prints the link, then waits for the browser step. Returns the flow's
+/// detail (e.g. the final name of a requested secret).
+fn browser_flow(
+    client: &Client,
+    resp: Response,
+    browser: &BrowserArgs,
+    what: &str,
+) -> Result<Option<String>> {
     let Response::FlowStarted { flow_id, url } = resp else {
         bail!("unexpected daemon response");
     };
@@ -719,10 +743,10 @@ fn browser_flow(client: &Client, resp: Response, browser: &BrowserArgs, what: &s
             flow_id: flow_id.clone(),
         })? {
             Response::FlowState {
-                state: FlowState::Done { message },
+                state: FlowState::Done { message, detail },
             } => {
                 eprintln!("{message}");
-                return Ok(EXIT_OK);
+                return Ok(detail);
             }
             Response::FlowState {
                 state: FlowState::Failed { message },
@@ -739,57 +763,4 @@ fn browser_flow(client: &Client, resp: Response, browser: &BrowserArgs, what: &s
         }
         std::thread::sleep(Duration::from_millis(300));
     }
-}
-
-/// Reads a secret value into locked memory: a hidden prompt on a terminal,
-/// otherwise all of stdin (minus one trailing newline unless `raw`).
-fn read_value(key: &str, raw: bool) -> Result<SecureBuf> {
-    let stdin = std::io::stdin();
-    if stdin.is_terminal() {
-        let value = zeroize::Zeroizing::new(
-            rpassword::prompt_password(format!("Value for {key}: ")).context("reading value")?,
-        );
-        if value.is_empty() {
-            return Err(exit(EXIT_USAGE, "empty value"));
-        }
-        return Ok(SecureBuf::from_slice(value.as_bytes())?);
-    }
-    // Grow by doubling (each old buffer is wiped when dropped), so typical
-    // values need little locked memory even under a small `ulimit -l`.
-    let too_large = || {
-        exit(
-            EXIT_USAGE,
-            format!("value is larger than {MAX_VALUE_LEN} bytes"),
-        )
-    };
-    let mut buf = SecureBuf::new(4096)?;
-    let mut len = 0;
-    let mut input = stdin.lock();
-    loop {
-        if len == buf.len() {
-            if len > MAX_VALUE_LEN {
-                return Err(too_large());
-            }
-            let mut bigger = SecureBuf::new((len * 2).min(MAX_VALUE_LEN + 1))?;
-            bigger.as_mut_slice()[..len].copy_from_slice(buf.as_slice());
-            buf = bigger;
-        }
-        let n = input.read(&mut buf.as_mut_slice()[len..])?;
-        if n == 0 {
-            break;
-        }
-        len += n;
-    }
-    if len > MAX_VALUE_LEN {
-        return Err(too_large());
-    }
-    if !raw {
-        if buf.as_slice()[..len].ends_with(b"\r\n") {
-            len -= 2;
-        } else if buf.as_slice()[..len].ends_with(b"\n") {
-            len -= 1;
-        }
-    }
-    buf.truncate(len);
-    Ok(buf)
 }

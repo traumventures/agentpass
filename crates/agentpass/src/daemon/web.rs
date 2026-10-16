@@ -35,6 +35,7 @@ pub fn router(d: Arc<Daemon>) -> Router {
     Router::new()
         .route("/api/flow", get(flow_info))
         .route("/api/flow/complete", post(flow_complete))
+        .route("/api/edit", post(edit))
         .fallback(get(asset))
         .layer(middleware::from_fn_with_state(d.clone(), guard))
         .with_state(d)
@@ -52,10 +53,18 @@ fn error(status: StatusCode, message: impl Into<String>) -> Response {
 
 impl IntoResponse for Fail {
     fn into_response(self) -> Response {
+        if self.code == ErrorCode::Declined {
+            // Declining is a normal outcome for the page; only the CLI fails.
+            return Json(proto::FlowResult {
+                message: self.message,
+            })
+            .into_response();
+        }
         let status = match self.code {
             ErrorCode::NotFound => StatusCode::NOT_FOUND,
             ErrorCode::Invalid => StatusCode::BAD_REQUEST,
             ErrorCode::Locked => StatusCode::CONFLICT,
+            ErrorCode::Declined => StatusCode::OK, // handled above
             ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         };
         error(status, self.message)
@@ -143,6 +152,18 @@ async fn flow_complete(
     Ok(Json(proto::FlowResult { message }))
 }
 
+async fn edit(
+    State(d): State<Arc<Daemon>>,
+    headers: HeaderMap,
+    Json(body): Json<proto::EditRequest>,
+) -> Result<Json<proto::EditResult>, Fail> {
+    let token = flow_token(&headers)?.to_owned();
+    let result = tokio::task::spawn_blocking(move || d.apply_edit(&token, body.ops))
+        .await
+        .map_err(Fail::internal)??;
+    Ok(Json(result))
+}
+
 /// index.html plus the CSP that allows exactly its inline scripts.
 fn index() -> &'static (String, String) {
     static INDEX: OnceLock<(String, String)> = OnceLock::new();
@@ -184,7 +205,10 @@ fn inline_scripts(html: &str) -> impl Iterator<Item = &str> {
 
 async fn asset(req: Request) -> Response {
     let path = req.uri().path();
-    if matches!(path, "/" | "/setup" | "/unlock" | "/enroll") {
+    if matches!(
+        path,
+        "/" | "/setup" | "/unlock" | "/enroll" | "/edit" | "/request"
+    ) {
         let (html, csp) = index();
         return Response::builder()
             .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
