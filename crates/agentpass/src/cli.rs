@@ -39,10 +39,19 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 locked, 4 not found, 5 timeout.";
 #[derive(Parser)]
 #[command(name = "agentpass", version, about = "A passkey-unlocked password manager for AI agents", after_help = AFTER_HELP)]
 struct Cli {
-    /// Vault: a file, a directory, or a name (`prod` = prod.agentpass.toml).
-    /// Default: the nearest *.agentpass.toml.
-    #[arg(long, global = true, env = "AGENTPASS_VAULT", value_name = "PATH")]
-    vault: Option<PathBuf>,
+    /// Vault file, relative to the current directory (or a name: `prod` =
+    /// prod.agentpass.toml). Needed when a directory has several vaults.
+    /// Default: the only *.agentpass.toml in the current directory or the
+    /// nearest parent.
+    #[arg(
+        long = "file",
+        short = 'f',
+        visible_alias = "vault",
+        global = true,
+        env = "AGENTPASS_FILE",
+        value_name = "PATH"
+    )]
+    file: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -219,6 +228,8 @@ pub fn main() -> i32 {
         Err(e) => {
             let code = if let Some(x) = e.downcast_ref::<Exit>() {
                 x.code
+            } else if e.downcast_ref::<vault::AmbiguousVault>().is_some() {
+                EXIT_USAGE
             } else if let Some(d) = e.downcast_ref::<DaemonError>() {
                 match d.code {
                     ErrorCode::Locked => EXIT_LOCKED,
@@ -251,7 +262,7 @@ fn locate(cli_vault: Option<&Path>) -> Result<Vault> {
 }
 
 fn run(cli: Cli) -> Result<i32> {
-    let vault_arg = cli.vault.as_deref();
+    let vault_arg = cli.file.as_deref();
     match cli.command {
         Command::Setup {
             name,
@@ -487,7 +498,10 @@ fn run(cli: Cli) -> Result<i32> {
             let v = locate(vault_arg)?;
             let mut mappings = Vec::new();
             for spec in &env {
-                let (name, key) = spec.split_once('=').unwrap_or((spec, spec));
+                // `-e production/DB_PASSWORD` exports DB_PASSWORD.
+                let (name, key) = spec
+                    .split_once('=')
+                    .unwrap_or((spec.rsplit('/').next().unwrap_or(spec), spec));
                 if name.is_empty()
                     || name.starts_with(|c: char| c.is_ascii_digit())
                     || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')

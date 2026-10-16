@@ -47,9 +47,13 @@ agentpass run -e NPM_TOKEN -e GH=GITHUB_TOKEN -- npm publish
 
 When you are finished with work that needed secrets, run `agentpass lock` unless the user asked to keep the vault unlocked.
 
+## Folders
+
+Secret names can contain folders, e.g. `production/DB_PASSWORD` and `testing/DB_PASSWORD`. `agentpass list` shows full names. `agentpass run -e production/DB_PASSWORD -- cmd` exports it as `DB_PASSWORD`; use `-e NAME=production/DB_PASSWORD` for another variable name. Pick the folder that matches the environment the user asked for.
+
 ## Several vaults
 
-The vault is found automatically (nearest `*.agentpass.toml` in the current directory or its parents; `secrets.agentpass.toml` wins if there are several). Select another one with `--vault prod` (→ `prod.agentpass.toml`), `--vault path/to/file.agentpass.toml` or `AGENTPASS_VAULT`.
+agentpass uses the `*.agentpass.toml` in the current directory (or the nearest parent that has one). If a directory has several, commands exit with code **2** and list them. Then add `--file <path>` (relative to the current directory) to every command, e.g. `agentpass --file prod.agentpass.toml get API_KEY`. If it is unclear which vault the task needs, ask the user.
 
 ## Exit codes
 
@@ -57,7 +61,7 @@ The vault is found automatically (nearest `*.agentpass.toml` in the current dire
 |---|---|---|
 | 0 | ok | |
 | 1 | error | read the message |
-| 2 | usage error | fix the command |
+| 2 | usage error, or several vaults found | fix the command; for several vaults add `--file <path>` |
 | 3 | vault locked | `agentpass unlock`, give the user the link, `agentpass wait` |
 | 4 | secret or passkey not found | `agentpass list`; ask the user to `agentpass set` it |
 | 5 | timed out | ask the user whether they still want to unlock, then retry |

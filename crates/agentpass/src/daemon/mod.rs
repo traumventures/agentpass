@@ -433,6 +433,7 @@ impl Daemon {
                         path: flow.vault_path.display().to_string(),
                         vault_id: String::new(),
                         secret_count: 0,
+                        secrets: vec![],
                     },
                     rp_id,
                     user_id: crypto::b64url(user_id),
@@ -585,6 +586,15 @@ fn summary(v: &Vault) -> proto::VaultSummary {
         path: v.path.display().to_string(),
         vault_id: v.id().to_owned(),
         secret_count: v.file.secrets.len(),
+        secrets: v
+            .file
+            .secrets
+            .iter()
+            .map(|(key, s)| proto::SecretSummary {
+                key: key.clone(),
+                description: s.description.clone(),
+            })
+            .collect(),
     }
 }
 

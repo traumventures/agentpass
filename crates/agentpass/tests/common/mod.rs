@@ -68,7 +68,7 @@ impl Sandbox {
             .current_dir(self.dir.path())
             .env("AGENTPASS_RUNTIME_DIR", self.dir.path().join("run"))
             .env("AGENTPASS_PORT", self.port.to_string())
-            .env("AGENTPASS_VAULT", self.vault())
+            .env("AGENTPASS_FILE", self.vault())
             .env_remove("XDG_SESSION_ID");
         c
     }

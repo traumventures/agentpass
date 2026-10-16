@@ -122,6 +122,72 @@ fn sigterm_locks_and_stops_the_daemon() {
 }
 
 #[test]
+fn several_vaults_require_file() {
+    let sb = Sandbox::new();
+    std::fs::copy(sb.vault(), sb.dir.path().join("prod.agentpass.toml")).unwrap();
+    let out = sb
+        .cmd(&["list"])
+        .env_remove("AGENTPASS_FILE")
+        .output()
+        .unwrap();
+    assert_eq!(code(&out), 2);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("prod.agentpass.toml") && stderr.contains("secrets.agentpass.toml"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("--file"), "{stderr}");
+    let out = sb
+        .cmd(&["--file", "./prod.agentpass.toml", "list"])
+        .env_remove("AGENTPASS_FILE")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn folder_secrets_work_with_get_and_run() {
+    let mut sb = Sandbox::new();
+    sb.start_daemon();
+    assert!(sb
+        .run(&["set", "production/DB_PASSWORD"], Some(b"prod-pw"))
+        .status
+        .success());
+    assert!(sb
+        .run(&["set", "testing/DB_PASSWORD"], Some(b"test-pw"))
+        .status
+        .success());
+    assert_eq!(code(&sb.run(&["set", "bad//name"], Some(b"x"))), 2);
+    sb.unlock(Some(60));
+    assert_eq!(
+        sb.run(&["get", "testing/DB_PASSWORD"], None).stdout,
+        b"test-pw"
+    );
+    let out = sb.run(
+        &[
+            "run",
+            "-e",
+            "production/DB_PASSWORD",
+            "--",
+            "sh",
+            "-c",
+            "printf %s \"$DB_PASSWORD\"",
+        ],
+        None,
+    );
+    assert_eq!(
+        out.stdout,
+        b"prod-pw",
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn vault_name_can_be_shown_and_changed() {
     let sb = Sandbox::new();
     assert_eq!(sb.run(&["name"], None).stdout, b"test\n");
@@ -139,7 +205,7 @@ fn vault_is_found_by_suffix_from_subdirectories() {
     std::fs::create_dir_all(&sub).unwrap();
     let out = sb
         .cmd(&["list", "--json"])
-        .env_remove("AGENTPASS_VAULT")
+        .env_remove("AGENTPASS_FILE")
         .current_dir(&sub)
         .output()
         .unwrap();
@@ -151,8 +217,8 @@ fn vault_is_found_by_suffix_from_subdirectories() {
     // A second vault, selected by name.
     std::fs::copy(sb.vault(), sb.dir.path().join("prod.agentpass.toml")).unwrap();
     let out = sb
-        .cmd(&["--vault", "prod", "name"])
-        .env_remove("AGENTPASS_VAULT")
+        .cmd(&["--file", "prod", "name"])
+        .env_remove("AGENTPASS_FILE")
         .output()
         .unwrap();
     assert!(
@@ -170,7 +236,7 @@ fn setup_names_the_vault_after_its_directory_by_default() {
     std::fs::create_dir(&project).unwrap();
     let out = sb
         .cmd(&["setup", "--timeout", "1s"])
-        .env_remove("AGENTPASS_VAULT")
+        .env_remove("AGENTPASS_FILE")
         .current_dir(&project)
         .stdin(std::process::Stdio::null())
         .output()

@@ -26,7 +26,7 @@ export async function sandbox() {
     ...process.env,
     AGENTPASS_RUNTIME_DIR: join(dir, "run"),
     AGENTPASS_PORT: String(port),
-    AGENTPASS_VAULT: join(dir, "secrets.agentpass.toml"),
+    AGENTPASS_FILE: join(dir, "secrets.agentpass.toml"),
     NO_COLOR: "1",
   };
   delete env.XDG_SESSION_ID;
@@ -66,7 +66,7 @@ export async function sandbox() {
     rmSync(dir, { recursive: true, force: true });
   }
 
-  return { dir, port, env, start, run, cleanup, vault: env.AGENTPASS_VAULT };
+  return { dir, port, env, start, run, cleanup, vault: env.AGENTPASS_FILE };
 }
 
 /** Adds a CTAP2 virtual authenticator (with or without PRF) to the page. */

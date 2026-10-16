@@ -62,6 +62,17 @@ pub struct VaultSummary {
     pub path: String,
     pub vault_id: String,
     pub secret_count: usize,
+    /// Every secret (names and descriptions only, never values), sorted by
+    /// key. `/` in a key separates folders.
+    #[serde(default)]
+    pub secrets: Vec<SecretSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SecretSummary {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -132,6 +143,7 @@ mod tests {
                 path: "/v/agentpass.toml".into(),
                 vault_id: "id".into(),
                 secret_count: 2,
+                secrets: vec![],
             },
             rp_id: RP_ID.into(),
             challenge: "c".into(),

@@ -14,7 +14,7 @@ dependencies = [
 
 [[package]]
 name = "agentpass"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "agentpass-protocol",
  "anyhow",
@@ -48,7 +48,7 @@ dependencies = [
 
 [[package]]
 name = "agentpass-protocol"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -56,7 +56,7 @@ dependencies = [
 
 [[package]]
 name = "agentpass-web"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "agentpass-protocol",
  "base64",

@@ -5,6 +5,7 @@
 
 mod api;
 mod duration;
+mod tree;
 mod webauthn;
 
 use agentpass_protocol::{FlowCompletion, FlowInfo, RegisterInfo, UnlockInfo, VaultSummary};
@@ -60,7 +61,7 @@ fn app() -> Html {
     let token = (*token).clone().unwrap_or_default();
 
     let body = match &*phase {
-        Phase::Loading => html! { <p class="muted">{ "Loading…" }</p> },
+        Phase::Loading => html! { <p class="muted">{ "> loading…" }</p> },
         Phase::Fatal(msg) => html! {
             <>
                 <h1>{ "Link not usable" }</h1>
@@ -70,7 +71,7 @@ fn app() -> Html {
         },
         Phase::Done(msg) => html! {
             <div class="done">
-                <div class="check" aria-hidden="true">{ "✓" }</div>
+                <div class="check" aria-hidden="true">{ "[ OK ]" }</div>
                 <h1>{ "All set" }</h1>
                 <p>{ msg }</p>
                 <p class="muted">{ "You can close this tab and return to your agent." }</p>
@@ -92,8 +93,9 @@ fn app() -> Html {
     html! {
         <main>
             <header class="brand">
-                <img src="/favicon.svg" alt="" width="28" height="28" />
+                <span class="logo" aria-hidden="true">{ "🔐" }</span>
                 <span>{ "agentpass" }</span>
+                <span class="cursor" aria-hidden="true">{ "_" }</span>
             </header>
             <section class="card">{ body }</section>
             <footer class="muted">
@@ -112,13 +114,15 @@ struct VaultCardProps {
 fn vault_card(props: &VaultCardProps) -> Html {
     let v = &props.vault;
     html! {
+        <>
         <dl class="vault">
             <dt>{ "Vault" }</dt><dd><strong>{ &v.name }</strong></dd>
             <dt>{ "File" }</dt><dd><code>{ &v.path }</code></dd>
-            if !v.vault_id.is_empty() {
-                <dt>{ "Secrets" }</dt><dd>{ v.secret_count }</dd>
-            }
         </dl>
+        if !v.vault_id.is_empty() {
+            <tree::SecretsTree secrets={v.secrets.clone()} />
+        }
+        </>
     }
 }
 

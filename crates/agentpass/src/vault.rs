@@ -209,8 +209,22 @@ fn with_suffix(p: &Path) -> PathBuf {
     }
 }
 
-/// The vault in `dir`: the only `*.agentpass.toml`, or `secrets.agentpass.toml`
-/// if there are several.
+/// Several vaults in one directory: the user has to pick one with `--file`.
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "found {} vaults in {}: {}. Choose one with --file <path>, e.g. `agentpass --file {} …`",
+    .files.len(),
+    .dir.display(),
+    .files.join(", "),
+    .files[0]
+)]
+pub struct AmbiguousVault {
+    pub dir: PathBuf,
+    pub files: Vec<String>,
+}
+
+/// The vault in `dir`: its only `*.agentpass.toml` (or a legacy
+/// `agentpass.toml`). Several vaults are an error, never a guess.
 pub fn find_in_dir(dir: &Path) -> Result<Option<PathBuf>> {
     let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
         .with_context(|| format!("listing {}", dir.display()))?
@@ -230,27 +244,25 @@ pub fn find_in_dir(dir: &Path) -> Result<Option<PathBuf>> {
             Ok(legacy.is_file().then_some(legacy))
         }
         1 => Ok(found.pop()),
-        _ => {
-            let default = dir.join(DEFAULT_FILE);
-            if default.is_file() {
-                return Ok(Some(default));
-            }
-            let names: Vec<String> = found
+        _ => Err(AmbiguousVault {
+            dir: dir.to_owned(),
+            files: found
                 .iter()
                 .filter_map(|p| p.file_name()?.to_str().map(str::to_owned))
-                .collect();
-            bail!(
-                "{} contains several vaults ({}); choose one with --vault",
-                dir.display(),
-                names.join(", ")
-            )
+                .collect(),
         }
+        .into()),
     }
 }
 
-/// Finds the vault: explicit path (flag or `AGENTPASS_VAULT`; a directory or
-/// a name like `prod` also work), otherwise the nearest `*.agentpass.toml` in
-/// the current directory or a parent.
+/// Finds the vault.
+///
+/// * `--file` (or `AGENTPASS_FILE`): a path (relative to the current
+///   directory), a directory containing exactly one vault, or a bare name
+///   (`prod` → `prod.agentpass.toml`).
+/// * Otherwise the `*.agentpass.toml` in the current directory, or in the
+///   nearest parent that has one. More than one in that directory is an error
+///   listing them.
 pub fn locate(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(p) = explicit {
         if p.is_dir() {
@@ -264,6 +276,9 @@ pub fn locate(explicit: Option<&Path>) -> Result<PathBuf> {
         } else {
             with_suffix(p)
         };
+        if !p.is_file() {
+            bail!("vault file {} does not exist", p.display());
+        }
         return absolute(&p);
     }
     let cwd = std::env::current_dir()?;
@@ -273,7 +288,7 @@ pub fn locate(explicit: Option<&Path>) -> Result<PathBuf> {
         }
     }
     bail!(
-        "no *{SUFFIX} vault found in {} or its parents; run `agentpass setup` or pass --vault",
+        "no *{SUFFIX} vault found in {} or its parents; run `agentpass setup` or pass --file",
         cwd.display()
     )
 }
@@ -294,19 +309,23 @@ pub fn new_vault_path(explicit: Option<&Path>) -> Result<PathBuf> {
     absolute(&p)
 }
 
-/// Secret names: letters, digits, `_`, `.` and `-`; must not start with `.`
-/// or `-`.
+/// Secret names: `/`-separated segments (folders), e.g. `production/DB_PASSWORD`.
+/// Each segment uses letters, digits, `_`, `.` and `-` and must not start
+/// with `.` or `-`.
 pub fn validate_key_name(key: &str) -> Result<()> {
-    let ok = !key.is_empty()
-        && key.len() <= 128
-        && key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
-        && !key.starts_with(['.', '-']);
-    if ok {
+    let segment_ok = |s: &str| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+            && !s.starts_with(['.', '-'])
+    };
+    if key.len() <= 128 && key.split('/').all(segment_ok) {
         Ok(())
     } else {
-        bail!("invalid secret name {key:?}: use letters, digits, '_', '.', '-' (max 128 chars)")
+        bail!(
+            "invalid secret name {key:?}: use letters, digits, '_', '.', '-', and '/' for folders \
+             (e.g. production/DB_PASSWORD; max 128 chars)"
+        )
     }
 }
 
@@ -393,8 +412,16 @@ mod tests {
         let (v, _) = new_vault(dir.path());
         let prod = dir.path().join("prod.agentpass.toml");
         std::fs::copy(&v.path, &prod).unwrap();
-        // secrets.agentpass.toml wins when there are several.
-        assert_eq!(locate(Some(dir.path())).unwrap(), v.path);
+        // Several vaults: never guess, list them.
+        let err = locate(Some(dir.path())).unwrap_err();
+        let amb = err
+            .downcast_ref::<AmbiguousVault>()
+            .expect("ambiguous error");
+        assert_eq!(
+            amb.files,
+            vec!["prod.agentpass.toml", "secrets.agentpass.toml"]
+        );
+        assert!(err.to_string().contains("--file"));
         // A bare name selects <name>.agentpass.toml.
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
@@ -454,10 +481,29 @@ mod tests {
 
     #[test]
     fn key_names() {
-        for ok in ["A", "GITHUB_TOKEN", "db.password", "x-1"] {
+        for ok in [
+            "A",
+            "GITHUB_TOKEN",
+            "db.password",
+            "x-1",
+            "production/DB",
+            "a/b/c",
+        ] {
             validate_key_name(ok).unwrap();
         }
-        for bad in ["", ".a", "-a", "a b", "a=b", "ä", &"x".repeat(129)] {
+        for bad in [
+            "",
+            ".a",
+            "-a",
+            "a b",
+            "a=b",
+            "ä",
+            "/a",
+            "a/",
+            "a//b",
+            "a/.b",
+            &"x".repeat(129),
+        ] {
             assert!(validate_key_name(bad).is_err(), "{bad}");
         }
     }

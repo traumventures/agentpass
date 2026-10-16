@@ -62,22 +62,34 @@ impl IntoResponse for Fail {
     }
 }
 
-async fn guard(State(d): State<Arc<Daemon>>, req: Request, next: Next) -> Response {
-    let port = d.port;
-    let host_ok = req
+/// Accepts `localhost` / `127.0.0.1` / `[::1]` with any port, so the page also
+/// works through port forwarding (e.g. `ssh -L 9000:localhost:47117`).
+/// Rejecting other host names is what stops DNS rebinding.
+pub(crate) fn local_host(host: &str) -> bool {
+    let name = match host.rsplit_once(':') {
+        Some((name, port)) if port.chars().all(|c| c.is_ascii_digit()) => name,
+        _ => host,
+    };
+    matches!(name, "localhost" | "127.0.0.1" | "[::1]")
+}
+
+async fn guard(State(_d): State<Arc<Daemon>>, req: Request, next: Next) -> Response {
+    let host = req
         .headers()
         .get(header::HOST)
         .and_then(|h| h.to_str().ok())
-        .is_some_and(|h| h == format!("localhost:{port}") || h == format!("127.0.0.1:{port}"));
-    if !host_ok {
+        .unwrap_or("")
+        .to_owned();
+    if !local_host(&host) {
         return error(StatusCode::MISDIRECTED_REQUEST, "unexpected Host header");
     }
     if req.method() != Method::GET && req.method() != Method::HEAD {
+        // Same-origin only: the Origin must be exactly the page's own origin.
         let origin_ok = req
             .headers()
             .get(header::ORIGIN)
             .and_then(|h| h.to_str().ok())
-            .is_some_and(|o| o == d.web_url());
+            .is_some_and(|o| o == format!("http://{host}"));
         if !origin_ok {
             return error(StatusCode::FORBIDDEN, "cross-origin request rejected");
         }
@@ -196,6 +208,27 @@ async fn asset(req: Request) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_hosts_on_any_port() {
+        for ok in [
+            "localhost:47117",
+            "localhost:53273",
+            "127.0.0.1:1",
+            "[::1]:80",
+            "localhost",
+        ] {
+            assert!(local_host(ok), "{ok}");
+        }
+        for bad in [
+            "evil.example:47117",
+            "localhost.evil.example:1",
+            "127.0.0.2:47117",
+            "",
+        ] {
+            assert!(!local_host(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn finds_inline_scripts_only() {

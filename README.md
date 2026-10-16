@@ -40,14 +40,15 @@ The web UI is prebuilt and committed, so Cargo needs no extra tools. Release arc
 cd my-project
 agentpass setup                         # name the vault, register a passkey in the browser
 agentpass set GITHUB_TOKEN -d "PAT for CI"   # prompts without echo
+agentpass set production/DB_PASSWORD    # use / for folders
 git add secrets.agentpass.toml          # safe to commit: values are encrypted
 agentpass init-skill                    # teach your coding agent how to use it
 ```
 
-From then on your agent handles the rest. When it needs a secret and the vault is locked, it runs `agentpass unlock` and shows you a link. You open it, choose how long the vault stays unlocked and touch your passkey:
+From then on your agent handles the rest. When it needs a secret and the vault is locked, it runs `agentpass unlock` and shows you a link. You open it, see exactly which secrets are in the vault, choose how long it stays unlocked and touch your passkey:
 
 <p align="center">
-  <img src="docs/unlock-light.png" alt="The agentpass unlock page: vault name, a duration picker (15 min, 1 hour, 8 hours, 24 hours, custom, until locked) and an Unlock with passkey button" width="480">
+  <img src="docs/unlock.png" alt="The agentpass unlock page: vault name, the tree of secrets and folders, a duration picker (15 min, 1 hour, 8 hours, 24 hours, custom, until locked) and an Unlock with passkey button" width="480">
 </p>
 
 ## Why agentpass?
@@ -94,7 +95,7 @@ Prefer to copy it yourself? The skill is [`skills/agentpass/SKILL.md`](skills/ag
 | `agentpass unlock [--suggest 1h\|forever] [--open]` | Print an unlock link and return immediately |
 | `agentpass wait [--timeout 10m]` | Block until unlocked (`--timeout 0` waits forever) |
 | `agentpass get KEY` | Write a value to stdout for piping (refuses a terminal unless `--reveal`) |
-| `agentpass run -e KEY -e NAME=KEY -- cmd …` | Run `cmd` with secrets as environment variables |
+| `agentpass run -e KEY -e NAME=KEY -- cmd …` | Run `cmd` with secrets as environment variables (`-e production/DB_PASSWORD` exports `DB_PASSWORD`) |
 | `agentpass lock [--all]` | Lock now: the key is wiped from memory |
 | `agentpass status [--all] [--json]` | Lock state and time left (exits `3` if locked) |
 | `agentpass name [NEW]` | Show or change the vault's name |
@@ -105,7 +106,30 @@ Prefer to copy it yourself? The skill is [`skills/agentpass/SKILL.md`](skills/ag
 
 ## Vault files
 
-A vault is a file named `<something>.agentpass.toml`; `agentpass setup` creates `secrets.agentpass.toml`. agentpass uses the nearest one in the current directory or its parents. If a directory has several, `secrets.agentpass.toml` wins. Select another with `--vault prod` (`prod.agentpass.toml`), a path, or `AGENTPASS_VAULT`.
+A vault is a file named `<something>.agentpass.toml`; `agentpass setup` creates `secrets.agentpass.toml`.
+
+- **Finding it:** agentpass uses the `*.agentpass.toml` in the current directory, or in the nearest parent that has one.
+- **Several vaults in one directory:** agentpass never guesses. It lists them and exits with code `2`; pick one with `--file`:
+
+  ```sh
+  agentpass --file prod.agentpass.toml get API_KEY   # a path, relative to the current directory
+  agentpass --file prod get API_KEY                  # short for prod.agentpass.toml
+  ```
+
+  `--file` works with every command, and `AGENTPASS_FILE` does the same from the environment.
+
+### Folders
+
+Use `/` in a secret's name to group secrets into folders, nested as deep as you like:
+
+```sh
+agentpass set production/DB_PASSWORD
+agentpass set production/aws/ACCESS_KEY_ID
+agentpass set testing/DB_PASSWORD
+agentpass run -e testing/DB_PASSWORD -- npm test   # exported as DB_PASSWORD
+```
+
+The unlock page shows the whole tree, so you can see what you're unlocking. The file stays flat and readable:
 
 ```toml
 version = 1
@@ -122,6 +146,9 @@ wrapped_private_key = "apw1:…"          # vault key, encrypted with this passk
 [secrets.GITHUB_TOKEN]
 description = "PAT for CI"
 value = "ap1:…"                         # encrypted to public_key
+
+[secrets."production/DB_PASSWORD"]
+value = "ap1:…"
 ```
 
 `set` encrypts to the public key, so adding a secret never needs your passkey. Enroll a second passkey (`agentpass passkey add`) as a backup.
@@ -147,7 +174,7 @@ value = "ap1:…"                         # encrypted to public_key
 - **Reliable wiping.** Fixed-size buffers are wiped with `zeroize`. Secret types print as `[REDACTED]`, and secrets are never logged.
 - **Few copies.** Values are decrypted in place, read by the CLI into locked memory, and `run` uses `execve` directly: no shell, no temp files.
 - **Locks on sleep and logout.** logind `PrepareForSleep`/`SessionRemoved` on Linux, IOKit power notifications on macOS, plus a clock check that catches any missed suspend.
-- **Hardened web page.** It listens only on `127.0.0.1`, rejects foreign `Host` headers and cross-origin POSTs, and sends a strict CSP. Each link carries a one-time token in the URL fragment; it expires after 15 minutes or 5 failed attempts.
+- **Hardened web page.** It listens only on `127.0.0.1`, accepts only `localhost` host names (any port, so port forwarding works), rejects cross-origin POSTs, and sends a strict CSP. Each link carries a one-time token in the URL fragment; it expires after 15 minutes or 5 failed attempts.
 
 These protections are tested. The test suite checks that `ptrace` and `/proc/<pid>/mem` are denied and that the daemon writes no core dump. With root it also scans the daemon's memory to confirm the key is present only in a locked, no-dump page and is gone after `lock`.
 
@@ -185,7 +212,7 @@ Change the port with `AGENTPASS_PORT`.
 
 | Variable | Purpose |
 |---|---|
-| `AGENTPASS_VAULT` | Vault to use (like `--vault`) |
+| `AGENTPASS_FILE` | Vault file to use (like `--file`) |
 | `AGENTPASS_PORT` | Web UI port (default `47117`, `0` = random) |
 | `AGENTPASS_RUNTIME_DIR` | Directory for the socket, lock file and daemon log |
 | `AGENTPASS_IDLE_EXIT_SECS` | Daemon exits after this long with nothing unlocked (default 1800, `0` = never) |
