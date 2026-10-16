@@ -434,3 +434,32 @@ fn editor_needs_the_passkey_then_applies_changes_atomically() {
         Some("first")
     );
 }
+
+#[test]
+fn no_wait_then_wait_flow_reports_the_result() {
+    let mut sb = Sandbox::new();
+    sb.start_daemon();
+    let out = sb.run(&["request", "API_KEY", "--no-wait"], None);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let url = String::from_utf8(out.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+    let flow = stderr
+        .lines()
+        .find_map(|l| l.strip_prefix("flow: "))
+        .expect("flow id printed")
+        .to_owned();
+    // Not done yet: a short wait times out.
+    assert_eq!(
+        code(&sb.run(&["wait", "--flow", &flow, "--timeout", "1s"], None)),
+        5
+    );
+    let body = serde_json::json!({ "kind": "provided", "key": "prod/API_KEY", "value": "v" });
+    assert_eq!(common::http_complete(&url, &body.to_string()).0, 200);
+    let out = sb.run(&["wait", "--flow", &flow], None);
+    assert!(out.status.success());
+    assert_eq!(out.stdout, b"prod/API_KEY\n");
+}

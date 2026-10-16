@@ -120,6 +120,11 @@ enum Command {
         /// Give up after this long (exit code 5). "0" waits forever.
         #[arg(long, default_value = "10m", value_name = "DURATION")]
         timeout: String,
+        /// Wait for a browser step started with --no-wait (setup, request,
+        /// edit, passkey add) instead of an unlock. Prints its result, e.g.
+        /// the final name of a requested secret.
+        #[arg(long, value_name = "ID")]
+        flow: Option<String>,
     },
     /// Write a secret's value to stdout, for piping into another command.
     Get {
@@ -211,8 +216,12 @@ struct BrowserArgs {
     #[arg(long)]
     open: bool,
     /// How long to wait for the browser step.
-    #[arg(long, default_value = "15m", value_name = "DURATION")]
+    #[arg(long, default_value = "60m", value_name = "DURATION")]
     timeout: String,
+    /// Print the link and return at once; then block with
+    /// `agentpass wait --flow <ID>` (the ID is printed on stderr).
+    #[arg(long)]
+    no_wait: bool,
 }
 
 /// An error with a specific exit code.
@@ -472,7 +481,26 @@ fn run(cli: Cli) -> Result<i32> {
             }
             Ok(EXIT_OK)
         }
-        Command::Wait { timeout } => {
+        Command::Wait {
+            timeout,
+            flow: Some(flow_id),
+        } => {
+            let client = Client::existing().ok_or_else(|| {
+                exit(
+                    EXIT_NOT_FOUND,
+                    "no agentpass daemon is running, so that flow is gone",
+                )
+            })?;
+            let timeout = parse_duration(&timeout)?;
+            if let Some(detail) = wait_flow(&client, &flow_id, timeout)? {
+                println!("{detail}");
+            }
+            Ok(EXIT_OK)
+        }
+        Command::Wait {
+            timeout,
+            flow: None,
+        } => {
             let v = locate(vault_arg)?;
             let timeout = parse_duration(&timeout)?;
             let deadline = (!timeout.is_zero()).then(|| Instant::now() + timeout);
@@ -736,11 +764,21 @@ fn browser_flow(
     if browser.open {
         open_browser(&url);
     }
+    if browser.no_wait {
+        eprintln!("flow: {flow_id}");
+        eprintln!("Then run `agentpass wait --flow {flow_id}` to block until it is done.");
+        return Ok(None);
+    }
     eprintln!("Waiting for the browser…");
-    let deadline = Instant::now() + timeout;
+    wait_flow(client, &flow_id, timeout)
+}
+
+/// Polls a browser flow until it finishes. Returns its detail.
+fn wait_flow(client: &Client, flow_id: &str, timeout: Duration) -> Result<Option<String>> {
+    let deadline = (!timeout.is_zero()).then(|| Instant::now() + timeout);
     loop {
         match client.request(&Request::FlowStatus {
-            flow_id: flow_id.clone(),
+            flow_id: flow_id.to_owned(),
         })? {
             Response::FlowState {
                 state: FlowState::Done { message, detail },
@@ -753,12 +791,10 @@ fn browser_flow(
             } => bail!("{message}"),
             Response::FlowState {
                 state: FlowState::Expired,
-            } => {
-                return Err(exit(EXIT_TIMEOUT, "the link expired"));
-            }
+            } => return Err(exit(EXIT_TIMEOUT, "the link expired")),
             _ => {}
         }
-        if Instant::now() >= deadline {
+        if deadline.is_some_and(|d| Instant::now() >= d) {
             return Err(exit(EXIT_TIMEOUT, "timed out waiting for the browser"));
         }
         std::thread::sleep(Duration::from_millis(300));

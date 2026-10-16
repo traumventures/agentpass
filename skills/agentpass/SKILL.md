@@ -58,6 +58,16 @@ Tell the user to open the printed link. They see the vault's tree with your sugg
 
 For bigger changes (renaming, deleting, reorganising folders), suggest `agentpass edit`: it opens the user's passkey-protected editor.
 
+## Browser steps without blocking
+
+`setup`, `request`, `edit` and `passkey add` block until the user is done in the browser, printing the link first. If your tool only shows output after a command exits, split it:
+
+```sh
+agentpass request production/STRIPE_KEY -d "Stripe key" --no-wait   # prints the link; stderr: "flow: <ID>"
+# give the user the link, then:
+agentpass wait --flow <ID>            # blocks; prints the result (e.g. the final secret name)
+```
+
 ## Folders and several vaults
 
 Secret names may contain folders: `production/DB_PASSWORD`, `testing/DB_PASSWORD`. Choose the folder matching the environment the user asked for.
@@ -77,4 +87,4 @@ agentpass uses the `*.agentpass.toml` in the current directory (or the nearest p
 
 ## Setting up a new vault
 
-Only when the user asks: `agentpass setup --name "<project>"` prints a link where the user registers a passkey (security key, or a passkey in their browser/password manager with PRF support). It creates `secrets.agentpass.toml`, which is safe to commit.
+Only when the user asks: `agentpass setup --name "<project>" --no-wait` prints a link (then `agentpass wait --flow <ID>`) where the user registers a passkey (security key, or a passkey in their browser/password manager with PRF support). It creates `secrets.agentpass.toml`, which is safe to commit.

@@ -42,7 +42,9 @@ fn take_token() -> Option<String> {
         }
         return Some(fresh);
     }
-    storage.and_then(|st| st.get_item(&key).ok().flatten()).filter(|t| !t.is_empty())
+    storage
+        .and_then(|st| st.get_item(&key).ok().flatten())
+        .filter(|t| !t.is_empty())
 }
 
 #[function_component(App)]

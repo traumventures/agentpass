@@ -42,10 +42,10 @@ Set up agentpass (https://github.com/traumventures/agentpass) for me and show me
    curl -fsSL https://raw.githubusercontent.com/traumventures/agentpass/main/install.sh | sh
 2. Run `agentpass init-skill --all --global --yes` so you know how to use it, then read
    the installed skill (`agentpass skill`) and follow its rules from now on.
-3. In this project run `agentpass setup --name "<project name>"` and give me the link.
-   I'll register a passkey in my browser.
-4. Run `agentpass request demo/HELLO -d "Demo secret" --reason "agentpass tour"` and give
-   me the link. I'll type a value there. Never ask me to paste a secret into the chat.
+3. In this project run `agentpass setup --name "<project name>" --no-wait`, give me the
+   link, then run `agentpass wait --flow <ID>` while I register a passkey in my browser.
+4. Run `agentpass request demo/HELLO -d "Demo secret" --reason "agentpass tour" --no-wait`,
+   give me the link, then `agentpass wait --flow <ID>`. I'll type a value there. Never ask me to paste a secret into the chat.
 5. Run `agentpass unlock --suggest 15m`, give me the link, then `agentpass wait`.
 6. Prove you can use the secret without seeing it:
    agentpass run -e HELLO=demo/HELLO -- sh -c 'echo "HELLO has ${#HELLO} characters"'
@@ -68,6 +68,7 @@ Set up agentpass (https://github.com/traumventures/agentpass) for me and show me
 | `edit` | Passkey-protected editor: add, change, rename, delete secrets and folders |
 | `list [--json]` | Names and descriptions (works while locked) |
 | `unlock [--suggest 1h\|forever]` · `wait` | Print an unlock link · block until unlocked |
+| `wait --flow ID` | Block until a browser step started with `--no-wait` is done |
 | `get KEY` | Value to stdout, for piping (refuses a terminal unless `--reveal`) |
 | `run -e KEY -e NAME=KEY -- cmd` | Run `cmd` with secrets as env vars |
 | `lock [--all]` · `status` | Lock now · show state and time left |
