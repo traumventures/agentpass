@@ -54,18 +54,17 @@ agentpass run -e NPM_TOKEN -- npm publish
 agentpass request production/STRIPE_KEY -d "Stripe live secret key" --reason "deploy needs to charge cards"
 ```
 
-Tell the user to open the printed link. They see the vault's tree with your suggestion, can change the folder, name and description, and type the value. The command blocks until they save (exit 0) or decline (exit 1), then prints the **final name** on the last stdout line. Use that name, it may differ from your suggestion. Pick folders that match the existing tree (`agentpass list`), e.g. `production/` vs `testing/`.
+Tell the user to open the printed link. They see the vault's tree with your suggestion, can change the folder, name and description, and type the value. Then `agentpass wait <ID>` blocks until they save (exit 0) or decline (exit 1) and prints the **final name**. Use that name, it may differ from your suggestion. Pick folders that match the existing tree (`agentpass list`), e.g. `production/` vs `testing/`.
 
 For bigger changes (renaming, deleting, reorganising folders), suggest `agentpass edit`: it opens the user's passkey-protected editor.
 
-## Browser steps without blocking
+## Browser steps: run, show the link, wait
 
-`setup`, `request`, `edit` and `passkey add` block until the user is done in the browser, printing the link first. If your tool only shows output after a command exits, split it:
+`setup`, `request`, `edit` and `passkey add` work like `unlock`: they print the link on stdout and `flow: <ID>` on stderr, then return at once. Give the user the link, then block:
 
 ```sh
-agentpass request production/STRIPE_KEY -d "Stripe key" --no-wait   # prints the link; stderr: "flow: <ID>"
-# give the user the link, then:
-agentpass wait --flow <ID>            # blocks; prints the result (e.g. the final secret name)
+agentpass request production/STRIPE_KEY -d "Stripe key"   # link + "flow: <ID>"
+agentpass wait <ID>                    # blocks; prints the result (e.g. the final secret name)
 ```
 
 ## Folders and several vaults
@@ -87,4 +86,4 @@ agentpass uses the `*.agentpass.toml` in the current directory (or the nearest p
 
 ## Setting up a new vault
 
-Only when the user asks: `agentpass setup --name "<project>" --no-wait` prints a link (then `agentpass wait --flow <ID>`) where the user registers a passkey (security key, or a passkey in their browser/password manager with PRF support). It creates `secrets.agentpass.toml`, which is safe to commit.
+Only when the user asks: `agentpass setup --name "<project>"` prints a link (then `agentpass wait <ID>`) where the user registers a passkey (security key, or a passkey in their browser/password manager with PRF support). It creates `secrets.agentpass.toml`, which is safe to commit.

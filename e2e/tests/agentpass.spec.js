@@ -7,7 +7,7 @@ const EXIT_NOT_FOUND = 4;
 const EXIT_TIMEOUT = 5;
 
 async function setupVault(page, ap, label = "Virtual key") {
-  const setup = ap.start(["setup", "--name", "e2e"]);
+  const setup = ap.start(["setup", "--name", "e2e", "--wait"]);
   await page.goto(await setup.url);
   await expect(page.getByRole("heading", { name: "Create your vault" })).toBeVisible();
   // The token is removed from the address bar right away.
@@ -21,7 +21,7 @@ async function setupVault(page, ap, label = "Virtual key") {
 
 /** The agent requests a secret; the user fills it in on the request page. */
 async function provideVia(page, ap, args, fill) {
-  const req = ap.start(["request", ...args, "--timeout", "60s"]);
+  const req = ap.start(["request", ...args, "--wait", "--timeout", "60s"]);
   await page.goto(await req.url);
   await expect(page.getByRole("heading", { name: "Secret requested" })).toBeVisible();
   await fill(page);
@@ -138,7 +138,7 @@ test("until locked, backup passkey enrollment and removal", async ({ page }) => 
     // Enroll a backup on a second authenticator.
     await first.remove();
     const backup = await virtualAuthenticator(page);
-    const add = ap.start(["passkey", "add", "--label", "Backup"]);
+    const add = ap.start(["passkey", "add", "--label", "Backup", "--wait"]);
     await page.goto(await add.url);
     await expect(page.getByRole("heading", { name: "Add a passkey" })).toBeVisible();
     await page.getByRole("button", { name: "Add passkey" }).click();
@@ -175,7 +175,7 @@ test("passkeys without PRF are refused", async ({ page }) => {
   const ap = await sandbox();
   try {
     await virtualAuthenticator(page, { prf: false });
-    const setup = ap.start(["setup", "--timeout", "20s"]);
+    const setup = ap.start(["setup", "--wait", "--timeout", "20s"]);
     await page.goto(await setup.url);
     await page.getByRole("button", { name: "Create passkey" }).click();
     await expect(page.getByRole("alert")).toContainText("does not support the PRF extension");
@@ -233,7 +233,7 @@ test("secrets editor: passkey, add, rename folder, delete, save", async ({ page 
     await provideVia(page, ap, ["prod/DB_PASSWORD"], (p) => p.getByLabel("Value").fill("db-1"));
     await provideVia(page, ap, ["OLD_TOKEN"], (p) => p.getByLabel("Value").fill("old"));
 
-    const edit = ap.start(["edit", "--timeout", "60s"]);
+    const edit = ap.start(["edit", "--wait", "--timeout", "60s"]);
     await page.goto(await edit.url);
     await page.getByRole("button", { name: "Open editor with passkey" }).click();
     await expect(page.getByRole("button", { name: "+ secret" })).toBeVisible();

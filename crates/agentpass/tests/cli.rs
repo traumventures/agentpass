@@ -222,7 +222,7 @@ fn setup_names_the_vault_after_its_directory_by_default() {
     let project = sb.dir.path().join("my-project");
     std::fs::create_dir(&project).unwrap();
     let out = sb
-        .cmd(&["setup", "--timeout", "1s"])
+        .cmd(&["setup", "--wait", "--timeout", "1s"])
         .env_remove("AGENTPASS_FILE")
         .current_dir(&project)
         .stdin(std::process::Stdio::null())
@@ -335,6 +335,7 @@ fn request_lets_the_user_rename_and_reports_the_final_name() {
             "Stripe",
             "--reason",
             "deploy",
+            "--wait",
             "--timeout",
             "30s",
         ],
@@ -368,7 +369,7 @@ fn request_refuses_silent_overwrite_and_can_be_declined() {
     let mut sb = Sandbox::new();
     sb.start_daemon();
     sb.put("K", b"old", None);
-    let (child, url) = start_flow(&sb, &["request", "K", "--timeout", "30s"]);
+    let (child, url) = start_flow(&sb, &["request", "K", "--wait", "--timeout", "30s"]);
     let body = |replace: bool| {
         serde_json::json!({ "kind": "provided", "key": "K", "value": "new", "replace": replace })
             .to_string()
@@ -388,7 +389,7 @@ fn editor_needs_the_passkey_then_applies_changes_atomically() {
     sb.start_daemon();
     sb.put("prod/A", b"a", Some("first"));
     sb.put("B", b"b", None);
-    let (child, url) = start_flow(&sb, &["edit", "--timeout", "30s"]);
+    let (child, url) = start_flow(&sb, &["edit", "--wait", "--timeout", "30s"]);
     let ops = |ops: serde_json::Value| serde_json::json!({ "ops": ops }).to_string();
     let rename = ops(serde_json::json!([
         { "op": "rename", "from": "prod/A", "to": "production/A" },
@@ -436,10 +437,10 @@ fn editor_needs_the_passkey_then_applies_changes_atomically() {
 }
 
 #[test]
-fn no_wait_then_wait_flow_reports_the_result() {
+fn browser_steps_return_at_once_and_wait_reports_the_result() {
     let mut sb = Sandbox::new();
     sb.start_daemon();
-    let out = sb.run(&["request", "API_KEY", "--no-wait"], None);
+    let out = sb.run(&["request", "API_KEY"], None);
     assert!(
         out.status.success(),
         "{}",
@@ -453,13 +454,10 @@ fn no_wait_then_wait_flow_reports_the_result() {
         .expect("flow id printed")
         .to_owned();
     // Not done yet: a short wait times out.
-    assert_eq!(
-        code(&sb.run(&["wait", "--flow", &flow, "--timeout", "1s"], None)),
-        5
-    );
+    assert_eq!(code(&sb.run(&["wait", &flow, "--timeout", "1s"], None)), 5);
     let body = serde_json::json!({ "kind": "provided", "key": "prod/API_KEY", "value": "v" });
     assert_eq!(common::http_complete(&url, &body.to_string()).0, 200);
-    let out = sb.run(&["wait", "--flow", &flow], None);
+    let out = sb.run(&["wait", &flow], None);
     assert!(out.status.success());
     assert_eq!(out.stdout, b"prod/API_KEY\n");
 }

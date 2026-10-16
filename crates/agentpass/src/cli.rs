@@ -120,10 +120,10 @@ enum Command {
         /// Give up after this long (exit code 5). "0" waits forever.
         #[arg(long, default_value = "10m", value_name = "DURATION")]
         timeout: String,
-        /// Wait for a browser step started with --no-wait (setup, request,
-        /// edit, passkey add) instead of an unlock. Prints its result, e.g.
+        /// Wait for a browser step (setup, request, edit, passkey add) by
+        /// the ID it printed, instead of an unlock. Prints its result, e.g.
         /// the final name of a requested secret.
-        #[arg(long, value_name = "ID")]
+        #[arg(value_name = "FLOW_ID")]
         flow: Option<String>,
     },
     /// Write a secret's value to stdout, for piping into another command.
@@ -215,13 +215,12 @@ struct BrowserArgs {
     /// Open the link in the default browser.
     #[arg(long)]
     open: bool,
-    /// How long to wait for the browser step.
+    /// Block until the browser step is done instead of returning at once.
+    #[arg(long)]
+    wait: bool,
+    /// With --wait: how long to wait.
     #[arg(long, default_value = "60m", value_name = "DURATION")]
     timeout: String,
-    /// Print the link and return at once; then block with
-    /// `agentpass wait --flow <ID>` (the ID is printed on stderr).
-    #[arg(long)]
-    no_wait: bool,
 }
 
 /// An error with a specific exit code.
@@ -764,9 +763,9 @@ fn browser_flow(
     if browser.open {
         open_browser(&url);
     }
-    if browser.no_wait {
+    if !browser.wait {
         eprintln!("flow: {flow_id}");
-        eprintln!("Then run `agentpass wait --flow {flow_id}` to block until it is done.");
+        eprintln!("Then run `agentpass wait {flow_id}` to block until it is done.");
         return Ok(None);
     }
     eprintln!("Waiting for the browser…");
