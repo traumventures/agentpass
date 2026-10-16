@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: trunk@0.21.14
+      - name: Build web UI
+        run: cd crates/web && trunk build --release
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: |
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo clippy -p agentpass-web --target wasm32-unknown-unknown -- -D warnings
+      - name: Unit and integration tests
+        run: cargo test --workspace
+      - name: Memory protection tests (root memory scans)
+        if: runner.os == 'Linux'
+        run: cargo test -p agentpass --test memory -- --ignored --nocapture
+      - uses: actions/setup-node@v4
+        if: runner.os == 'Linux'
+        with:
+          node-version: 22
+      - name: End-to-end tests (Chromium, virtual PRF authenticator)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build -p agentpass
+          cd e2e
+          npm install --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npx playwright test

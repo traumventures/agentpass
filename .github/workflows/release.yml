@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    strategy:
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown,${{ matrix.target }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: trunk@0.21.14
+      - name: Build
+        run: |
+          (cd crates/web && trunk build --release)
+          cargo build --release --locked -p agentpass --target ${{ matrix.target }}
+      - name: Sign (macOS, ad hoc, hardened runtime, no get-task-allow)
+        if: runner.os == 'macOS'
+        run: codesign --force --options runtime --sign - target/${{ matrix.target }}/release/agentpass
+      - name: Package
+        run: |
+          dir=agentpass-${{ github.ref_name }}-${{ matrix.target }}
+          mkdir "$dir"
+          cp target/${{ matrix.target }}/release/agentpass README.md LICENSE-MIT LICENSE-APACHE "$dir"/
+          tar czf "$dir.tar.gz" "$dir"
+          shasum -a 256 "$dir.tar.gz" > "$dir.tar.gz.sha256"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            agentpass-*.tar.gz
+            agentpass-*.tar.gz.sha256
