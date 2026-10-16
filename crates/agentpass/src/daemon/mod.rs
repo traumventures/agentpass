@@ -51,7 +51,7 @@ struct Unlocked {
 
 enum FlowKind {
     Setup {
-        name: Option<String>,
+        name: String,
         label: String,
         user_id: [u8; 16],
         prf_salt: [u8; 32],
@@ -305,8 +305,14 @@ impl Daemon {
                     Some(dir) if dir.is_dir() => {}
                     _ => return Err(Fail::invalid("the vault's directory does not exist")),
                 }
+                let name = match name.filter(|n| !n.trim().is_empty()) {
+                    Some(n) => {
+                        vault::validate_vault_name(&n).map_err(|e| Fail::invalid(e.to_string()))?
+                    }
+                    None => vault::default_name(&vault_path),
+                };
                 let kind = FlowKind::Setup {
-                    name: name.filter(|n| !n.trim().is_empty()),
+                    name,
                     label: sanitize_label(label, "Passkey 1"),
                     user_id: crypto::random_bytes()?,
                     prf_salt: crypto::random_bytes()?,
@@ -420,9 +426,7 @@ impl Daemon {
                 user_id,
                 prf_salt,
             } => {
-                let vname = name
-                    .clone()
-                    .unwrap_or_else(|| vault::default_name(&flow.vault_path));
+                let vname = name.clone();
                 proto::FlowInfo::Setup(proto::RegisterInfo {
                     vault: proto::VaultSummary {
                         name: vname.clone(),

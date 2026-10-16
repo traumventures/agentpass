@@ -38,7 +38,7 @@ impl Sandbox {
         let file = VaultFile {
             version: vault::VERSION,
             vault_id: vault_id.clone(),
-            name: Some("test".into()),
+            name: "test".into(),
             public_key: crypto::b64(&key.public_key()),
             passkeys: vec![PasskeyEntry {
                 label: "test key".into(),
@@ -49,7 +49,7 @@ impl Sandbox {
             }],
             secrets: Default::default(),
         };
-        vault::write_atomic(&dir.path().join("agentpass.toml"), &file).unwrap();
+        vault::write_atomic(&dir.path().join("secrets.agentpass.toml"), &file).unwrap();
         Self {
             port: free_port(),
             key: key.expose().to_vec(),
@@ -59,7 +59,7 @@ impl Sandbox {
     }
 
     pub fn vault(&self) -> PathBuf {
-        self.dir.path().join("agentpass.toml")
+        self.dir.path().join("secrets.agentpass.toml")
     }
 
     pub fn cmd(&self, args: &[&str]) -> Command {
@@ -119,7 +119,6 @@ impl Sandbox {
             String::from_utf8_lossy(&out.stderr)
         );
         let url = String::from_utf8(out.stdout).unwrap();
-        let token = url.trim().split('#').nth(1).unwrap().to_owned();
         let body = serde_json::json!({
             "kind": "unlocked",
             "credential_id": CRED,
@@ -127,26 +126,37 @@ impl Sandbox {
             "duration_secs": duration_secs,
         })
         .to_string();
-        let (status, resp) = self.http_post("/api/flow/complete", &token, &body);
+        let (status, resp) = http_complete(&url, &body);
         assert_eq!(status, 200, "{resp}");
     }
+}
 
-    pub fn http_post(&self, path: &str, token: &str, body: &str) -> (u16, String) {
-        let mut s = TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        let port = self.port;
-        write!(
-            s,
-            "POST {path} HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\n\
-             x-agentpass-token: {token}\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        )
+/// Posts a flow completion for the link `url` (as printed by the CLI) to the
+/// daemon that issued it. The port comes from the link because the daemon
+/// falls back to a random port when the requested one is taken.
+pub fn http_complete(url: &str, body: &str) -> (u16, String) {
+    let url = url.trim();
+    let (base, token) = url.split_once('#').expect("link has a token");
+    let port: u16 = base
+        .trim_start_matches("http://localhost:")
+        .split('/')
+        .next()
+        .unwrap()
+        .parse()
         .unwrap();
-        let mut resp = String::new();
-        s.read_to_string(&mut resp).unwrap();
-        let status = resp[9..12].parse().unwrap();
-        (status, resp)
-    }
+    let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        s,
+        "POST /api/flow/complete HTTP/1.1\r\nHost: localhost:{port}\r\nOrigin: http://localhost:{port}\r\n\
+         x-agentpass-token: {token}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut resp = String::new();
+    s.read_to_string(&mut resp).unwrap();
+    let status = resp[9..12].parse().unwrap();
+    (status, resp)
 }
 
 impl Drop for Sandbox {

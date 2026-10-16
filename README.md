@@ -1,159 +1,216 @@
-# agentpass
+<div align="center">
+
+# 🔐 agentpass
 
 **A password manager for AI agents, unlocked with your passkey.**
 
-Your agent needs a GitHub token, an API key or a database password. With agentpass:
+Your coding agent gets the API keys it needs, **only when you say so**, without the secrets ever touching disk, logs or its own context.
 
-- Secrets live in an `agentpass.toml` file you can commit to git. Names and descriptions are plain text; **only the values are encrypted**.
-- When the agent needs a secret, it asks you to unlock the vault. You open a link on `localhost`, **choose how long it stays unlocked** (15 min … 24 h, custom, or until locked) and confirm with a **passkey**: a security key such as a YubiKey, or a passkey from a password manager in your browser.
-- Decrypted data **exists only in RAM**, inside a small background daemon. The agent gets values **through a pipe** or **as environment variables of a child process**, never through files.
+[![CI](https://github.com/traumventures/agentpass/actions/workflows/ci.yml/badge.svg)](https://github.com/traumventures/agentpass/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/traumventures/agentpass)](https://github.com/traumventures/agentpass/releases)
+![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20macOS-informational)
+![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
+
+</div>
 
 ```sh
-agentpass get GITHUB_TOKEN | gh auth login --with-token
-agentpass run -e NPM_TOKEN -- npm publish
+agentpass get GITHUB_TOKEN | gh auth login --with-token   # piped straight into the command
+agentpass run -e NPM_TOKEN -- npm publish                 # or passed as an env variable
 ```
-
-Linux and macOS are supported.
 
 ## Install
 
-Download a binary from the [releases](https://github.com/traumventures/agentpass/releases), or build it yourself:
+**Prebuilt binary** (Linux and macOS, x86_64 and arm64):
 
 ```sh
-rustup target add wasm32-unknown-unknown
-cargo install trunk just
-git clone https://github.com/traumventures/agentpass && cd agentpass
-just install          # builds the Yew web UI, then installs the binary
+curl -fsSL https://raw.githubusercontent.com/traumventures/agentpass/main/install.sh | sh
 ```
 
-## Quick start
+**With Cargo**, from this repository:
+
+```sh
+cargo install --locked --git https://github.com/traumventures/agentpass agentpass
+```
+
+The web UI is prebuilt and committed, so Cargo needs no extra tools. Release archives with SHA-256 checksums are also on the [releases page](https://github.com/traumventures/agentpass/releases).
+
+## Get started in a minute
 
 ```sh
 cd my-project
-agentpass setup --open                 # create agentpass.toml, register a passkey
-agentpass set GITHUB_TOKEN -d "PAT for CI"   # prompts without echo (or pipe the value in)
-git add agentpass.toml && git commit -m "Add agentpass vault"
-
-agentpass unlock --open                # pick a duration, touch your passkey
-agentpass get GITHUB_TOKEN | gh auth login --with-token
-agentpass lock
+agentpass setup                         # name the vault, register a passkey in the browser
+agentpass set GITHUB_TOKEN -d "PAT for CI"   # prompts without echo
+git add secrets.agentpass.toml          # safe to commit: values are encrypted
+agentpass init-skill                    # teach your coding agent how to use it
 ```
 
-`set`, `list` and `rm` work while the vault is locked: values are encrypted to the vault's public key, so adding a secret never needs the passkey.
+From then on your agent handles the rest. When it needs a secret and the vault is locked, it runs `agentpass unlock` and shows you a link. You open it, choose how long the vault stays unlocked and touch your passkey:
+
+<p align="center">
+  <img src="docs/unlock-light.png" alt="The agentpass unlock page: vault name, a duration picker (15 min, 1 hour, 8 hours, 24 hours, custom, until locked) and an Unlock with passkey button" width="480">
+</p>
+
+## Why agentpass?
+
+Agents need credentials, but the usual options leak them: `.env` files sit in plain text on disk, keys pasted into chat end up in transcripts, and a global keychain unlock gives everything access to everything.
+
+agentpass is built around a few rules:
+
+- 🔑 **Your passkey is the key.** Unlocking needs a WebAuthn passkey with the PRF extension: a YubiKey or other security key, or a passkey in 1Password, Bitwarden, iCloud Keychain or Google Password Manager. There is no master password to leak.
+- ⏱️ **You decide how long.** 15 minutes, a few hours, a custom time, or until you lock it. Sleep, logout and reboot always lock it.
+- 🧠 **Plaintext only in RAM.** Decrypted keys live in locked, no-dump memory inside a small background daemon. Values are handed out through a pipe or a child process's environment, never through files.
+- 📁 **Commit your vault.** `secrets.agentpass.toml` keeps names and descriptions readable for review. Only values are encrypted, so it's safe to commit to git.
+- 🤖 **Made for agents.** Clear exit codes, `wait` to block until you've unlocked, and a ready-made skill for Claude Code, Codex, Cursor, Copilot, Gemini CLI and OpenCode.
+
+## Teach your agent
+
+`agentpass init-skill` asks which coding agents you use and whether to install for all your projects or only this one, then writes the skill to the right place:
+
+| Agent | Global | Project |
+|---|---|---|
+| Claude Code | `~/.claude/skills/` | `.claude/skills/` |
+| Codex (and others that read `.agents`) | `~/.agents/skills/` | `.agents/skills/` |
+| Cursor | `~/.cursor/skills/` | `.cursor/skills/` |
+| GitHub Copilot | `~/.copilot/skills/` | `.github/skills/` |
+| Gemini CLI | `~/.gemini/skills/` | `.gemini/skills/` |
+| OpenCode | `~/.config/opencode/skills/` | `.opencode/skills/` |
+
+It also runs without prompts: `agentpass init-skill --tool claude --tool codex --project --yes`, or `--all --global`.
+
+Prefer to copy it yourself? The skill is [`skills/agentpass/SKILL.md`](skills/agentpass/SKILL.md), and `agentpass skill` prints it. In short, it tells the agent to:
+
+- never print or capture secret values
+- pipe values into commands, or use `agentpass run`
+- on exit code `3`, run `agentpass unlock`, show you the link, then run `agentpass wait`
+- ask you to run `agentpass set` yourself instead of pasting secrets into the chat
 
 ## Commands
 
 | Command | What it does |
 |---|---|
-| `agentpass setup [--name N] [--label L] [--open]` | Create a vault and register its first passkey in the browser |
-| `agentpass passkey add [--label L] [--open]` | Register a backup passkey (vault must be unlocked) |
-| `agentpass passkey list` / `remove <label\|id>` | List or remove passkeys (`remove` needs the vault unlocked; the last passkey cannot be removed) |
-| `agentpass set KEY [-d DESC] [--raw]` | Encrypt and store a value from stdin or a hidden prompt |
-| `agentpass list [--json]` / `rm KEY` | Show names and descriptions / delete a secret |
-| `agentpass unlock [--suggest 1h\|forever] [--open] [--force]` | Print an unlock link and return immediately |
-| `agentpass wait [--timeout 10m]` | Block until the vault is unlocked (`--timeout 0` waits forever) |
-| `agentpass get KEY [--reveal]` | Write the value to stdout for piping (refuses a terminal unless `--reveal`) |
-| `agentpass run -e KEY -e NAME=KEY -- cmd args…` | Run `cmd` with secrets as environment variables |
-| `agentpass lock [--all]` | Lock now; the key is wiped from memory |
-| `agentpass status [--all] [--json]` | Show lock state and time left |
+| `agentpass setup [--name N] [--label L] [--open]` | Create a vault and register its first passkey |
+| `agentpass set KEY [-d DESC]` | Encrypt and store a value from a hidden prompt or stdin (works while locked) |
+| `agentpass list [--json]` · `rm KEY` | Show names and descriptions · delete a secret |
+| `agentpass unlock [--suggest 1h\|forever] [--open]` | Print an unlock link and return immediately |
+| `agentpass wait [--timeout 10m]` | Block until unlocked (`--timeout 0` waits forever) |
+| `agentpass get KEY` | Write a value to stdout for piping (refuses a terminal unless `--reveal`) |
+| `agentpass run -e KEY -e NAME=KEY -- cmd …` | Run `cmd` with secrets as environment variables |
+| `agentpass lock [--all]` | Lock now: the key is wiped from memory |
+| `agentpass status [--all] [--json]` | Lock state and time left (exits `3` if locked) |
+| `agentpass name [NEW]` | Show or change the vault's name |
+| `agentpass passkey add\|list\|remove` | Manage backup passkeys (`add` and `remove` need the vault unlocked) |
+| `agentpass skill` · `init-skill` | Print or install the agent skill |
 
-The vault is the `--vault` path, then `$AGENTPASS_VAULT`, then the nearest `agentpass.toml` in the current directory or its parents.
+**Exit codes:** `0` ok · `1` error · `2` usage · `3` locked · `4` not found · `5` timeout
 
-**Exit codes:** `0` ok · `1` error · `2` usage · `3` locked · `4` not found · `5` timeout. `status` exits `3` when locked.
+## Vault files
 
-## For agents
-
-Paste this into your `AGENTS.md` / `CLAUDE.md`:
-
-```markdown
-## Secrets (agentpass)
-- Secrets are in agentpass.toml. List them with `agentpass list`.
-- Never print a secret or capture it into your context. Pipe it into the command
-  that needs it (`agentpass get KEY | cmd --password-stdin`) or use
-  `agentpass run -e KEY -- cmd`.
-- If a command exits with code 3, the vault is locked: run `agentpass unlock`,
-  show the user the printed link, then run `agentpass wait` and retry.
-- Do not run `agentpass get --reveal`.
-```
-
-## How it works
-
-```text
-   agent ──CLI──▶ agentpass ──Unix socket (0600, same uid)──▶ daemon (keys in mlocked RAM)
-                                                              │
-   user  ──browser──▶ http://localhost:47117 (Yew UI) ────────┘  WebAuthn PRF ▶ unwrap vault key
-```
-
-### Vault file
+A vault is a file named `<something>.agentpass.toml`; `agentpass setup` creates `secrets.agentpass.toml`. agentpass uses the nearest one in the current directory or its parents. If a directory has several, `secrets.agentpass.toml` wins. Select another with `--vault prod` (`prod.agentpass.toml`), a path, or `AGENTPASS_VAULT`.
 
 ```toml
 version = 1
-vault_id = "01JA…"
+vault_id = "01K7…"
 name = "my-project"
-public_key = "base64…"                 # X25519
+public_key = "base64…"                  # X25519
 
 [[passkeys]]
 label = "YubiKey 5C"
 credential_id = "base64url…"
 prf_salt = "base64url…"
-wrapped_private_key = "apw1:…"         # private key, encrypted with this passkey's PRF output
+wrapped_private_key = "apw1:…"          # vault key, encrypted with this passkey's PRF output
 
 [secrets.GITHUB_TOKEN]
 description = "PAT for CI"
-value = "ap1:…"                        # encrypted to public_key
+value = "ap1:…"                         # encrypted to public_key
 ```
 
-### Cryptography
+`set` encrypts to the public key, so adding a secret never needs your passkey. Enroll a second passkey (`agentpass passkey add`) as a backup.
 
-- **Passkey to key.** The WebAuthn **PRF extension** (CTAP2 `hmac-secret`) returns a stable 32-byte secret per passkey and salt. agentpass derives a wrapping key from it with HKDF-SHA256 and unwraps the vault's X25519 private key (XChaCha20-Poly1305). The unwrapped key must match `public_key`, so a successful unlock proves the passkey is genuine. Passkeys without PRF are refused at setup. User verification is always required, because CTAP2 returns different PRF outputs with and without it.
-- **Values** are sealed to the vault's public key: ephemeral X25519, HKDF-SHA256, then ChaCha20-Poly1305. The vault id and secret name are authenticated, so a ciphertext cannot be moved to another key or vault.
-- **Several passkeys.** Each enrolled passkey wraps the same private key, so a backup passkey can unlock the vault on its own.
+## How it works
 
-### Protecting secrets in RAM
+```text
+ agent ──▶ agentpass CLI ──Unix socket (0600, same uid)──▶ daemon: vault keys in mlocked RAM
+                                                            ▲
+ you   ──▶ browser: http://localhost:47117 (Yew) ── WebAuthn PRF ──┘ unwraps the vault key
+```
 
-1. **Little plaintext, kept briefly.** Only the 32-byte vault private key stays decrypted. Each `get`/`run` decrypts one value, sends it and wipes it; nothing is cached.
-2. **No swap, no dumps.** Keys and values live in dedicated `mmap` regions with guard pages, locked with `mlock` and marked `MADV_DONTDUMP` (plus `MADV_WIPEONFORK`). The daemon sets `RLIMIT_CORE=0`.
-3. **No same-user inspection.** On Linux the daemon is `PR_SET_DUMPABLE=0`, so ptrace and `/proc/<pid>/mem` are denied to other processes of the same user. On macOS it uses `PT_DENY_ATTACH`.
-4. **Reliable wiping.** Buffers are wiped with `zeroize` on drop. They have a fixed size, so no reallocation leaves copies behind. Secret types print as `[REDACTED]`, and the daemon never logs secrets.
-5. **Few copies.** Values are decrypted in place into locked memory and written to the socket from there. The CLI reads them into locked memory. `run` uses `execve` directly, with no shell and no temp files.
-6. **Locking.** The key is wiped when the chosen time is up, on `agentpass lock`, on SIGTERM/SIGINT/SIGHUP, **before the system sleeps** (logind `PrepareForSleep` on Linux, IOKit power notifications on macOS, plus a clock check that catches any missed suspend) and **when your login session ends**. "Until locked" still ends on sleep, logout or reboot.
-7. **Access control.** The socket sits in a `0700` directory (`$XDG_RUNTIME_DIR/agentpass`) with mode `0600`, and the daemon checks the peer uid on every connection. The web server listens only on `127.0.0.1`. It rejects foreign `Host` headers (DNS rebinding) and cross-origin POSTs, and sends a strict CSP. Each link carries a one-time token in the URL fragment; the token expires after 15 minutes or 5 failed attempts and is removed from the address bar on load.
+1. **Daemon.** The first `unlock` starts a background daemon (the same binary). It serves the unlock page on `127.0.0.1` and answers the CLI over a private Unix socket.
+2. **Unlock.** The page asks your passkey for its **PRF** output, a stable 32-byte secret the authenticator derives from a per-passkey salt. HKDF turns it into a key that unwraps the vault's X25519 private key (XChaCha20-Poly1305). The key must match the vault's public key, so a successful unlock proves the passkey is genuine.
+3. **Values.** Each value is sealed to the vault's public key: ephemeral X25519, HKDF-SHA256, then ChaCha20-Poly1305. The vault id and secret name are authenticated, so a ciphertext can't be moved to another key.
+4. **Lock.** When your chosen time is up, or on `lock`, sleep, logout or daemon exit, the key is wiped.
 
-These are tested: [`crates/agentpass/tests/memory.rs`](crates/agentpass/tests/memory.rs) checks that ptrace and `/proc/<pid>/mem` are denied and that the daemon writes no core dump. Run as root (`just test-memory`), it also scans the daemon's memory to confirm the key is present only in one mlocked, no-dump mapping, that served plaintext doesn't linger, and that the key bytes are gone after `lock`.
+### Protecting secrets in memory
 
-### Limits (threat model)
+- **Short-lived plaintext.** Only the 32-byte vault key stays decrypted. Each request decrypts one value, sends it and wipes it.
+- **Not swapped, not dumped.** Secrets live in dedicated `mmap` regions with guard pages, `mlock`ed and marked `MADV_DONTDUMP`/`MADV_WIPEONFORK`. Core dumps are disabled.
+- **Same-user inspection blocked.** The daemon is non-dumpable (`PR_SET_DUMPABLE=0`) on Linux and uses `PT_DENY_ATTACH` on macOS, so other processes of your user can't `ptrace` it or read `/proc/<pid>/mem`.
+- **Reliable wiping.** Fixed-size buffers are wiped with `zeroize`. Secret types print as `[REDACTED]`, and secrets are never logged.
+- **Few copies.** Values are decrypted in place, read by the CLI into locked memory, and `run` uses `execve` directly: no shell, no temp files.
+- **Locks on sleep and logout.** logind `PrepareForSleep`/`SessionRemoved` on Linux, IOKit power notifications on macOS, plus a clock check that catches any missed suspend.
+- **Hardened web page.** It listens only on `127.0.0.1`, rejects foreign `Host` headers and cross-origin POSTs, and sends a strict CSP. Each link carries a one-time token in the URL fragment; it expires after 15 minutes or 5 failed attempts.
 
-- **While unlocked, any process running as your user can ask the daemon for secrets.** That is what lets your agent use them. Unlock for short periods and lock when done.
-- **Root and the kernel can read any memory.**
-- **Once a value has been piped into another program, protecting it is up to that program.**
-- **Leaked values.** If an agent captures `agentpass get` output into its own context instead of piping it, the value ends up in the agent's transcript. Use the patterns above.
-- **Remote machines.** The unlock page uses the `localhost` relying party. If agentpass runs on a remote machine, forward the port (`ssh -L 47117:localhost:47117 host`) and open the link locally. Set `AGENTPASS_PORT` to change the port.
+These protections are tested. The test suite checks that `ptrace` and `/proc/<pid>/mem` are denied and that the daemon writes no core dump. With root it also scans the daemon's memory to confirm the key is present only in a locked, no-dump page and is gone after `lock`.
 
-## Passkey support
+### What agentpass does not protect against
 
-PRF is supported by current Chrome, Edge, Safari and Firefox, FIDO2 security keys with `hmac-secret` (YubiKey 5, SoloKeys, Nitrokey 3, Google Titan …), iCloud Keychain, Google Password Manager, 1Password and Bitwarden. If a passkey can't do PRF, setup says so and nothing is saved.
+- **While unlocked, any process running as your user can ask for secrets.** That is how your agent uses them, so keep unlock windows short.
+- **Root or a compromised kernel** can read any memory.
+- **After a value is piped into another program,** keeping it safe is up to that program.
+- **Captured output.** An agent that captures `get` output instead of piping it puts the value in its transcript. The skill tells it not to.
 
-## Environment
+## FAQ
+
+**Which passkeys work?** Any that support the WebAuthn **PRF** extension (CTAP2 `hmac-secret`):
+
+- FIDO2 security keys (YubiKey 5, SoloKeys, Nitrokey 3, Google Titan …)
+- iCloud Keychain, Google Password Manager, 1Password and Bitwarden
+- current Chrome, Edge, Safari and Firefox
+
+If a passkey can't do PRF, setup says so and nothing is saved.
+
+**My agent runs on a remote machine.** Forward the port and open the link locally:
+
+```sh
+ssh -L 47117:localhost:47117 your-server
+```
+
+Change the port with `AGENTPASS_PORT`.
+
+**What if I lose my passkey?** Without an enrolled passkey the values can't be decrypted. Add a backup with `agentpass passkey add`, for example a second security key or a password-manager passkey.
+
+**Where do logs go?** `$XDG_RUNTIME_DIR/agentpass/daemon.log`. It records events, never secrets.
+
+<details>
+<summary>Environment variables</summary>
 
 | Variable | Purpose |
 |---|---|
-| `AGENTPASS_VAULT` | Vault path (like `--vault`) |
-| `AGENTPASS_PORT` | Web UI port (default `47117`; `0` = random) |
-| `AGENTPASS_RUNTIME_DIR` | Socket, lock file and daemon log directory |
+| `AGENTPASS_VAULT` | Vault to use (like `--vault`) |
+| `AGENTPASS_PORT` | Web UI port (default `47117`, `0` = random) |
+| `AGENTPASS_RUNTIME_DIR` | Directory for the socket, lock file and daemon log |
 | `AGENTPASS_IDLE_EXIT_SECS` | Daemon exits after this long with nothing unlocked (default 1800, `0` = never) |
+
+</details>
 
 ## Development
 
 ```sh
-just web          # build the Yew UI (crates/web) with trunk
-just build        # release binary with the UI embedded
-just test         # unit + integration tests, then Playwright e2e in Chromium with a virtual PRF authenticator
-just test-memory  # memory scans (needs sudo)
+rustup target add wasm32-unknown-unknown && cargo install trunk just
+just web          # rebuild the Yew UI into crates/agentpass/ui (commit the result)
+just build        # release binary
+just test         # unit + integration tests, then Playwright e2e with a virtual PRF authenticator
+just test-memory  # memory scans of the running daemon (needs sudo)
 just lint
 ```
 
-Layout: `crates/agentpass` (CLI, daemon, crypto, vault, locked memory, web server), `crates/protocol` (types shared with the UI), `crates/web` (Yew UI), `e2e` (Playwright).
+| Path | Contents |
+|---|---|
+| `crates/agentpass` | CLI, daemon, crypto, vault format, locked memory, web server |
+| `crates/protocol` | Types shared with the UI |
+| `crates/web` | Yew UI |
+| `skills/agentpass` | The agent skill |
+| `e2e` | Playwright tests |
 
 ## License
 
-Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT) at your option.
+Licensed under either the [Apache License 2.0](LICENSE-APACHE) or the [MIT license](LICENSE-MIT), at your option.

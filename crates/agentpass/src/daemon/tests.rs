@@ -20,7 +20,7 @@ fn token_of(resp: &Response) -> (String, String) {
 const CRED: &str = "Y3JlZGVudGlhbC0x";
 
 fn setup_vault(d: &Daemon, dir: &Path, prf: &[u8; 32]) -> PathBuf {
-    let path = dir.join("agentpass.toml");
+    let path = dir.join("secrets.agentpass.toml");
     let (resp, _) = d
         .handle(Request::Setup {
             vault_path: path.clone(),

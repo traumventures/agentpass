@@ -1,4 +1,4 @@
-//! The `agentpass.toml` vault file. Only secret values (and wrapped private
+//! Vault files (`<name>.agentpass.toml`, by default `secrets.agentpass.toml`). Only secret values (and wrapped private
 //! keys) are encrypted; everything else is plain text so the file can be
 //! reviewed and committed to git.
 
@@ -11,7 +11,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::crypto::{self, KEY_LEN};
 
-pub const FILE_NAME: &str = "agentpass.toml";
+/// Every vault file name ends with this suffix.
+pub const SUFFIX: &str = ".agentpass.toml";
+/// File name used by `agentpass setup` unless told otherwise.
+pub const DEFAULT_FILE: &str = "secrets.agentpass.toml";
+/// File name used by agentpass 0.1.0; still found for compatibility.
+const LEGACY_FILE: &str = "agentpass.toml";
 pub const VERSION: u32 = 1;
 
 const HEADER: &str = "# agentpass vault: https://github.com/traumventures/agentpass\n\
@@ -22,8 +27,10 @@ const HEADER: &str = "# agentpass vault: https://github.com/traumventures/agentp
 pub struct VaultFile {
     pub version: u32,
     pub vault_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
+    /// Human-readable vault name, shown on the unlock page and in the CLI.
+    /// (Optional when reading files written by agentpass 0.1.0.)
+    #[serde(default)]
+    pub name: String,
     /// X25519 public key (base64).
     pub public_key: String,
     #[serde(default)]
@@ -63,8 +70,11 @@ impl Vault {
         let path = absolute(path)?;
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading vault {}", path.display()))?;
-        let file: VaultFile =
+        let mut file: VaultFile =
             toml::from_str(&text).with_context(|| format!("parsing vault {}", path.display()))?;
+        if file.name.trim().is_empty() {
+            file.name = default_name(&path);
+        }
         if file.version != VERSION {
             bail!(
                 "{} has vault version {}, this agentpass supports version {VERSION}",
@@ -84,10 +94,7 @@ impl Vault {
     }
 
     pub fn name(&self) -> String {
-        self.file
-            .name
-            .clone()
-            .unwrap_or_else(|| default_name(&self.path))
+        self.file.name.clone()
     }
 
     pub fn id(&self) -> &str {
@@ -138,7 +145,7 @@ pub fn write_atomic(path: &Path, file: &VaultFile) -> Result<()> {
         ".{}.tmp-{}",
         path.file_name()
             .and_then(|n| n.to_str())
-            .unwrap_or(FILE_NAME),
+            .unwrap_or(DEFAULT_FILE),
         std::process::id()
     ));
     let result = (|| -> Result<()> {
@@ -155,12 +162,28 @@ pub fn write_atomic(path: &Path, file: &VaultFile) -> Result<()> {
     result.with_context(|| format!("writing vault {}", path.display()))
 }
 
+/// Default vault name: the directory name, plus the file's prefix unless it
+/// is the default `secrets` (`my-project`, `my-project/prod`).
 pub fn default_name(path: &Path) -> String {
-    path.parent()
+    let dir = path
+        .parent()
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
-        .unwrap_or("agentpass")
-        .to_owned()
+        .unwrap_or("agentpass");
+    let file = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    match file.strip_suffix(SUFFIX) {
+        Some(prefix) if !prefix.is_empty() && prefix != "secrets" => format!("{dir}/{prefix}"),
+        _ => dir.to_owned(),
+    }
+}
+
+/// Validates a vault name given by the user.
+pub fn validate_vault_name(name: &str) -> Result<String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
+        bail!("invalid vault name {name:?}: use 1 to 64 printable characters");
+    }
+    Ok(name.to_owned())
 }
 
 pub fn absolute(path: &Path) -> Result<PathBuf> {
@@ -176,37 +199,99 @@ pub fn absolute(path: &Path) -> Result<PathBuf> {
     }
 }
 
-/// Finds the vault: explicit path (flag or `AGENTPASS_VAULT`), otherwise the
-/// nearest `agentpass.toml` in the current directory or a parent.
+/// `prod` → `prod.agentpass.toml`; paths ending in `.toml` are kept.
+fn with_suffix(p: &Path) -> PathBuf {
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if name.ends_with(".toml") {
+        p.to_owned()
+    } else {
+        p.with_file_name(format!("{name}{SUFFIX}"))
+    }
+}
+
+/// The vault in `dir`: the only `*.agentpass.toml`, or `secrets.agentpass.toml`
+/// if there are several.
+pub fn find_in_dir(dir: &Path) -> Result<Option<PathBuf>> {
+    let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+        .with_context(|| format!("listing {}", dir.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_file()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.ends_with(SUFFIX) && n.len() > SUFFIX.len())
+        })
+        .collect();
+    found.sort();
+    match found.len() {
+        0 => {
+            let legacy = dir.join(LEGACY_FILE);
+            Ok(legacy.is_file().then_some(legacy))
+        }
+        1 => Ok(found.pop()),
+        _ => {
+            let default = dir.join(DEFAULT_FILE);
+            if default.is_file() {
+                return Ok(Some(default));
+            }
+            let names: Vec<String> = found
+                .iter()
+                .filter_map(|p| p.file_name()?.to_str().map(str::to_owned))
+                .collect();
+            bail!(
+                "{} contains several vaults ({}); choose one with --vault",
+                dir.display(),
+                names.join(", ")
+            )
+        }
+    }
+}
+
+/// Finds the vault: explicit path (flag or `AGENTPASS_VAULT`; a directory or
+/// a name like `prod` also work), otherwise the nearest `*.agentpass.toml` in
+/// the current directory or a parent.
 pub fn locate(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(p) = explicit {
-        let p = if p.is_dir() {
-            p.join(FILE_NAME)
-        } else {
+        if p.is_dir() {
+            return match find_in_dir(p)? {
+                Some(f) => absolute(&f),
+                None => bail!("no *{SUFFIX} vault in {}", p.display()),
+            };
+        }
+        let p = if p.is_file() {
             p.to_owned()
+        } else {
+            with_suffix(p)
         };
         return absolute(&p);
     }
     let cwd = std::env::current_dir()?;
     for dir in cwd.ancestors() {
-        let candidate = dir.join(FILE_NAME);
-        if candidate.is_file() {
-            return absolute(&candidate);
+        if let Some(f) = find_in_dir(dir)? {
+            return absolute(&f);
         }
     }
     bail!(
-        "no {FILE_NAME} found in {} or its parents; run `agentpass setup` or pass --vault",
+        "no *{SUFFIX} vault found in {} or its parents; run `agentpass setup` or pass --vault",
         cwd.display()
     )
 }
 
-/// Path for a new vault: explicit path or `./agentpass.toml`.
+/// Path for a new vault: `./secrets.agentpass.toml`, a directory (gets
+/// `secrets.agentpass.toml`), a name (`prod` → `prod.agentpass.toml`) or a
+/// full `<name>.agentpass.toml` path.
 pub fn new_vault_path(explicit: Option<&Path>) -> Result<PathBuf> {
-    match explicit {
-        Some(p) if p.is_dir() => absolute(&p.join(FILE_NAME)),
-        Some(p) => absolute(p),
-        None => absolute(Path::new(FILE_NAME)),
+    let p = match explicit {
+        None => PathBuf::from(DEFAULT_FILE),
+        Some(p) if p.is_dir() => p.join(DEFAULT_FILE),
+        Some(p) => with_suffix(p),
+    };
+    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if !name.ends_with(SUFFIX) || name.len() == SUFFIX.len() {
+        bail!("vault files must be named <name>{SUFFIX} (got {name:?})");
     }
+    absolute(&p)
 }
 
 /// Secret names: letters, digits, `_`, `.` and `-`; must not start with `.`
@@ -235,7 +320,7 @@ mod tests {
         let file = VaultFile {
             version: VERSION,
             vault_id: "01TEST".into(),
-            name: None,
+            name: "test".into(),
             public_key: crypto::b64(&key.public_key()),
             passkeys: vec![PasskeyEntry {
                 label: "test".into(),
@@ -247,7 +332,7 @@ mod tests {
             }],
             secrets: BTreeMap::new(),
         };
-        let path = dir.join(FILE_NAME);
+        let path = dir.join(DEFAULT_FILE);
         write_atomic(&path, &file).unwrap();
         (Vault::load(&path).unwrap(), key)
     }
@@ -300,6 +385,71 @@ mod tests {
         std::env::set_current_dir(prev).unwrap();
         assert_eq!(found.unwrap(), v.path);
         assert_eq!(locate(Some(dir.path())).unwrap(), v.path);
+    }
+
+    #[test]
+    fn several_vaults_in_one_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let (v, _) = new_vault(dir.path());
+        let prod = dir.path().join("prod.agentpass.toml");
+        std::fs::copy(&v.path, &prod).unwrap();
+        // secrets.agentpass.toml wins when there are several.
+        assert_eq!(locate(Some(dir.path())).unwrap(), v.path);
+        // A bare name selects <name>.agentpass.toml.
+        let prev = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+        let by_name = locate(Some(Path::new("prod")));
+        std::env::set_current_dir(prev).unwrap();
+        assert_eq!(by_name.unwrap(), absolute(&prod).unwrap());
+        std::fs::remove_file(&v.path).unwrap();
+        let other = dir.path().join("dev.agentpass.toml");
+        std::fs::copy(&prod, &other).unwrap();
+        assert!(
+            locate(Some(dir.path())).is_err(),
+            "ambiguous without a default"
+        );
+    }
+
+    #[test]
+    fn names_and_new_paths() {
+        assert_eq!(
+            default_name(Path::new("/x/proj/secrets.agentpass.toml")),
+            "proj"
+        );
+        assert_eq!(
+            default_name(Path::new("/x/proj/prod.agentpass.toml")),
+            "proj/prod"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let base = absolute(dir.path()).unwrap();
+        assert_eq!(
+            new_vault_path(Some(dir.path())).unwrap(),
+            base.join(DEFAULT_FILE)
+        );
+        assert_eq!(
+            new_vault_path(Some(&dir.path().join("prod"))).unwrap(),
+            base.join("prod.agentpass.toml")
+        );
+        assert!(new_vault_path(Some(&dir.path().join("x.toml"))).is_err());
+        assert!(new_vault_path(Some(&dir.path().join(".agentpass.toml"))).is_err());
+        assert!(validate_vault_name("  my vault ").unwrap() == "my vault");
+        assert!(validate_vault_name("").is_err());
+    }
+
+    #[test]
+    fn legacy_files_without_name_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let (v, _) = new_vault(dir.path());
+        let legacy = dir.path().join("agentpass.toml");
+        let text = std::fs::read_to_string(&v.path)
+            .unwrap()
+            .replace("name = \"test\"\n", "");
+        std::fs::write(&legacy, text).unwrap();
+        std::fs::remove_file(&v.path).unwrap();
+        let found = locate(Some(dir.path())).unwrap();
+        assert_eq!(found, absolute(&legacy).unwrap());
+        let loaded = Vault::load(&found).unwrap();
+        assert!(!loaded.name().is_empty());
     }
 
     #[test]

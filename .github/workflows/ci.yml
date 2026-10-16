@@ -7,6 +7,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Fail if crates/agentpass/ui is older than the web UI sources.
+  AGENTPASS_REQUIRE_FRESH_UI: "1"
 
 jobs:
   test:
@@ -23,11 +25,6 @@ jobs:
           targets: wasm32-unknown-unknown
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: trunk@0.21.14
-      - name: Build web UI
-        run: cd crates/web && trunk build --release
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
@@ -43,6 +40,13 @@ jobs:
         if: runner.os == 'Linux'
         with:
           node-version: 22
+      - name: Skill installs into every agent (smoke test)
+        if: runner.os == 'Linux'
+        run: |
+          HOME=$(mktemp -d) cargo run -q -p agentpass -- init-skill --all --global --yes
+      - name: cargo install from git
+        if: runner.os == 'Linux' && github.event_name == 'push'
+        run: cargo install --locked --git https://github.com/${{ github.repository }} --rev ${{ github.sha }} agentpass --root /tmp/ap && /tmp/ap/bin/agentpass --version
       - name: End-to-end tests (Chromium, virtual PRF authenticator)
         if: runner.os == 'Linux'
         run: |

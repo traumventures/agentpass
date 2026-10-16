@@ -22,20 +22,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown,${{ matrix.target }}
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: trunk@0.21.14
+          targets: ${{ matrix.target }}
       - name: Build
         run: |
-          (cd crates/web && trunk build --release)
           cargo build --release --locked -p agentpass --target ${{ matrix.target }}
       - name: Sign (macOS, ad hoc, hardened runtime, no get-task-allow)
         if: runner.os == 'macOS'
         run: codesign --force --options runtime --sign - target/${{ matrix.target }}/release/agentpass
       - name: Package
         run: |
-          dir=agentpass-${{ github.ref_name }}-${{ matrix.target }}
+          dir=agentpass-${{ matrix.target }}
           mkdir "$dir"
           cp target/${{ matrix.target }}/release/agentpass README.md LICENSE-MIT LICENSE-APACHE "$dir"/
           tar czf "$dir.tar.gz" "$dir"

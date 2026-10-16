@@ -1,4 +1,7 @@
+# The built UI is committed to crates/agentpass/ui so that
+# `cargo install --git https://github.com/traumventures/agentpass` works
+# without trunk. Rebuild with `just web` after changing the UI.
 [build]
 target = "index.html"
-dist = "dist"
-filehash = true
+dist = "../agentpass/ui"
+filehash = false

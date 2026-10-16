@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
+readme = "../../README.md"
+keywords = ["password-manager", "passkey", "webauthn", "secrets", "ai-agents"]
+categories = ["command-line-utilities", "cryptography"]
 
 [[bin]]
 name = "agentpass"
@@ -36,11 +39,14 @@ humantime = "2"
 rpassword = "7"
 dirs = "5"
 open = "5"
-subtle = "2"
+dialoguer = { version = "0.11", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "5", default-features = false, features = ["tokio"] }
 futures-util = { version = "0.3", default-features = false }
+
+[build-dependencies]
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

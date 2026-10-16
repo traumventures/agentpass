@@ -7,4 +7,5 @@ pub mod crypto;
 pub mod daemon;
 pub mod ipc;
 pub mod secmem;
+pub mod skill;
 pub mod vault;

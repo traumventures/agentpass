@@ -29,6 +29,8 @@ Typical agent workflow:
   agentpass get GITHUB_TOKEN | gh auth login --with-token
   agentpass run -e NPM_TOKEN -- npm publish
 
+Teach your coding agent: `agentpass init-skill` (or `agentpass skill`).
+
 Never capture a secret into your own context: pipe `get` straight into the
 command that needs it, or use `run` to pass it as an environment variable.
 
@@ -37,7 +39,8 @@ Exit codes: 0 ok, 1 error, 2 usage, 3 locked, 4 not found, 5 timeout.";
 #[derive(Parser)]
 #[command(name = "agentpass", version, about = "A passkey-unlocked password manager for AI agents", after_help = AFTER_HELP)]
 struct Cli {
-    /// Vault file or directory (default: nearest agentpass.toml).
+    /// Vault: a file, a directory, or a name (`prod` = prod.agentpass.toml).
+    /// Default: the nearest *.agentpass.toml.
     #[arg(long, global = true, env = "AGENTPASS_VAULT", value_name = "PATH")]
     vault: Option<PathBuf>,
     #[command(subcommand)]
@@ -129,6 +132,33 @@ enum Command {
         all: bool,
         #[arg(long)]
         json: bool,
+    },
+    /// Show the vault's name, or rename it.
+    Name {
+        /// New name (1 to 64 characters).
+        new_name: Option<String>,
+    },
+    /// Print the agent skill (SKILL.md) that teaches coding agents to use
+    /// agentpass safely.
+    Skill,
+    /// Install the agent skill for Claude Code, Codex, Cursor, Copilot,
+    /// Gemini CLI or OpenCode (interactive unless flags are given).
+    InitSkill {
+        /// Agent to install for (repeatable).
+        #[arg(long = "tool", value_enum, value_name = "AGENT")]
+        tools: Vec<crate::skill::Tool>,
+        /// Install for every supported agent.
+        #[arg(long, conflicts_with = "tools")]
+        all: bool,
+        /// Install into your home directory (all projects).
+        #[arg(long, conflicts_with = "project")]
+        global: bool,
+        /// Install into the current project (git root).
+        #[arg(long)]
+        project: bool,
+        /// Don't ask for confirmation.
+        #[arg(short, long)]
+        yes: bool,
     },
     /// Run the background daemon (started automatically).
     #[command(hide = true)]
@@ -232,6 +262,27 @@ fn run(cli: Cli) -> Result<i32> {
             if path.exists() {
                 bail!("{} already exists", path.display());
             }
+            let name = match name {
+                Some(n) => {
+                    vault::validate_vault_name(&n).map_err(|e| exit(EXIT_USAGE, e.to_string()))?
+                }
+                None if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() => {
+                    dialoguer::Input::<String>::with_theme(
+                        &dialoguer::theme::ColorfulTheme::default(),
+                    )
+                    .with_prompt("Vault name")
+                    .default(vault::default_name(&path))
+                    .validate_with(|n: &String| {
+                        vault::validate_vault_name(n)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string())
+                    })
+                    .interact_text()?
+                }
+                None => vault::default_name(&path),
+            };
+            eprintln!("Creating vault \"{name}\" at {}", path.display());
+            let name = Some(name);
             let client = Client::connect_or_spawn()?;
             let resp = client.request(&Request::Setup {
                 vault_path: path.clone(),
@@ -546,6 +597,45 @@ fn run(cli: Cli) -> Result<i32> {
                 }
             }
             Ok(if s.is_some() { EXIT_OK } else { EXIT_LOCKED })
+        }
+        Command::Name { new_name } => {
+            let mut v = locate(vault_arg)?;
+            match new_name {
+                None => println!("{}", v.name()),
+                Some(n) => {
+                    v.file.name = vault::validate_vault_name(&n)
+                        .map_err(|e| exit(EXIT_USAGE, e.to_string()))?;
+                    v.save()?;
+                    eprintln!("Renamed vault to \"{}\"", v.file.name);
+                }
+            }
+            Ok(EXIT_OK)
+        }
+        Command::Skill => {
+            print!("{}", crate::skill::SKILL_MD);
+            Ok(EXIT_OK)
+        }
+        Command::InitSkill {
+            tools,
+            all,
+            global,
+            project,
+            yes,
+        } => {
+            use crate::skill::Scope;
+            crate::skill::init(crate::skill::InitOptions {
+                tools,
+                all,
+                scope: if global {
+                    Some(Scope::Global)
+                } else if project {
+                    Some(Scope::Project)
+                } else {
+                    None
+                },
+                yes,
+            })?;
+            Ok(EXIT_OK)
         }
         Command::Daemon { stop } => {
             if stop {

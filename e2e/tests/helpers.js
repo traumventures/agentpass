@@ -26,7 +26,7 @@ export async function sandbox() {
     ...process.env,
     AGENTPASS_RUNTIME_DIR: join(dir, "run"),
     AGENTPASS_PORT: String(port),
-    AGENTPASS_VAULT: join(dir, "agentpass.toml"),
+    AGENTPASS_VAULT: join(dir, "secrets.agentpass.toml"),
     NO_COLOR: "1",
   };
   delete env.XDG_SESSION_ID;
