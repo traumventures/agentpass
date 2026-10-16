@@ -115,7 +115,8 @@ enum Command {
         #[arg(long)]
         force: bool,
     },
-    /// Block until the vault is unlocked.
+    /// Block until the vault is unlocked, or until the browser step with
+    /// the given flow ID (printed by unlock, setup, request, edit) is done.
     Wait {
         /// Give up after this long (exit code 5). "0" waits forever.
         #[arg(long, default_value = "10m", value_name = "DURATION")]
@@ -462,7 +463,7 @@ fn run(cli: Cli) -> Result<i32> {
                     return Ok(EXIT_OK);
                 }
             }
-            let Response::FlowStarted { url, .. } = client.request(&Request::Unlock {
+            let Response::FlowStarted { url, flow_id } = client.request(&Request::Unlock {
                 vault_path: v.path.clone(),
                 suggest_secs,
             })?
@@ -474,7 +475,10 @@ fn run(cli: Cli) -> Result<i32> {
                 v.name()
             );
             println!("{url}");
-            eprintln!("Then run `agentpass wait` to block until it is unlocked.");
+            eprintln!("flow: {flow_id}");
+            eprintln!(
+                "Show the user the link first, then run `agentpass wait {flow_id}` to block until it is unlocked."
+            );
             if open {
                 open_browser(&url);
             }
@@ -765,7 +769,9 @@ fn browser_flow(
     }
     if !browser.wait {
         eprintln!("flow: {flow_id}");
-        eprintln!("Then run `agentpass wait {flow_id}` to block until it is done.");
+        eprintln!(
+            "Show the user the link first, then run `agentpass wait {flow_id}` to block until it is done."
+        );
         return Ok(None);
     }
     eprintln!("Waiting for the browser…");

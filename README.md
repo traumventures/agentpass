@@ -33,7 +33,7 @@ Linux and macOS, x86_64 and arm64.
 
 ## Let your agent set it up
 
-Paste this into Claude Code, Codex, Cursor or any coding agent:
+Paste this into Claude Code, Codex, Cursor or any coding agent. Every browser step works the same way: the agent runs the command, shows you the link, then runs `agentpass wait <flow id>`.
 
 ```text
 Set up agentpass (https://github.com/traumventures/agentpass) for me and show me how it works.
@@ -46,7 +46,7 @@ Set up agentpass (https://github.com/traumventures/agentpass) for me and show me
    then run `agentpass wait <flow id>` while I register a passkey in my browser.
 4. Run `agentpass request demo/HELLO -d "Demo secret" --reason "agentpass tour"`,
    give me the link, then `agentpass wait <flow id>`. I'll type a value there. Never ask me to paste a secret into the chat.
-5. Run `agentpass unlock --suggest 15m`, give me the link, then `agentpass wait`.
+5. Run `agentpass unlock --suggest 15m`, give me the link, then `agentpass wait <flow id>`.
 6. Prove you can use the secret without seeing it:
    agentpass run -e HELLO=demo/HELLO -- sh -c 'echo "HELLO has ${#HELLO} characters"'
 7. Run `agentpass edit` and give me the link so I can see the editor, then `agentpass lock`.

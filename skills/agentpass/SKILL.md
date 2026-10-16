@@ -26,17 +26,7 @@ agentpass list                      # names (with folders) + descriptions; works
 agentpass status                    # exit 0 = unlocked, 3 = locked
 ```
 
-If the vault is locked (any command exits with code **3**):
-
-```sh
-agentpass unlock --suggest 1h       # prints a link; returns immediately
-```
-
-Show the user the printed `http://localhost:…` link and ask them to open it and confirm with their passkey. Suggest a duration that fits the task (`30m`, `1h`, `8h` or `forever`). Then block until they're done:
-
-```sh
-agentpass wait --timeout 10m        # exit 0 = unlocked, 5 = timed out
-```
+If the vault is locked (any command exits with code **3**), follow the browser-step pattern below with `agentpass unlock --suggest 1h` (suggest `30m`, `1h`, `8h` or `forever` to fit the task; the user decides).
 
 Then use the secret:
 
@@ -54,17 +44,22 @@ agentpass run -e NPM_TOKEN -- npm publish
 agentpass request production/STRIPE_KEY -d "Stripe live secret key" --reason "deploy needs to charge cards"
 ```
 
-Tell the user to open the printed link. They see the vault's tree with your suggestion, can change the folder, name and description, and type the value. Then `agentpass wait <ID>` blocks until they save (exit 0) or decline (exit 1) and prints the **final name**. Use that name, it may differ from your suggestion. Pick folders that match the existing tree (`agentpass list`), e.g. `production/` vs `testing/`.
+Use the browser-step pattern above. On the page the user sees the vault's tree with your suggestion, can change the folder, name and description, and type the value. Then `agentpass wait <ID>` blocks until they save (exit 0) or decline (exit 1) and prints the **final name**. Use that name, it may differ from your suggestion. Pick folders that match the existing tree (`agentpass list`), e.g. `production/` vs `testing/`.
 
 For bigger changes (renaming, deleting, reorganising folders), suggest `agentpass edit`: it opens the user's passkey-protected editor.
 
-## Browser steps: run, show the link, wait
+## Browser steps: start, show the link, then wait
 
-`setup`, `request`, `edit` and `passkey add` work like `unlock`: they print the link on stdout and `flow: <ID>` on stderr, then return at once. Give the user the link, then block:
+`unlock`, `setup`, `request`, `edit` and `passkey add` need the user in the browser. They print a link on stdout and `flow: <ID>` on stderr, then return at once. Always do exactly these three steps, in this order:
+
+1. **Start:** run the command on its own, e.g. `agentpass unlock --suggest 1h`. Never chain `wait` onto it (`… && agentpass wait`, `;`, pipes, background jobs).
+2. **Show:** send the user a message with the full `http://localhost:…#…` link (and what to do there) **before** running anything else. The user cannot see command output that you don't relay, and a blocked command can't show them anything.
+3. **Wait:** run `agentpass wait <ID>` as a separate command. It blocks until the user is done and prints the result (for `request`: the final secret name). Exit 5 = timed out: ask the user, then wait again or start a new link.
 
 ```sh
-agentpass request production/STRIPE_KEY -d "Stripe key"   # link + "flow: <ID>"
-agentpass wait <ID>                    # blocks; prints the result (e.g. the final secret name)
+agentpass request production/STRIPE_KEY -d "Stripe key"   # 1. stdout: link, stderr: "flow: <ID>"
+# 2. message to the user: "Please open <link> and enter the Stripe key."
+agentpass wait <ID>                                        # 3. prints production/STRIPE_KEY
 ```
 
 ## Folders and several vaults
@@ -80,7 +75,7 @@ agentpass uses the `*.agentpass.toml` in the current directory (or the nearest p
 | 0 | ok | |
 | 1 | error, or the user declined a request | read the message |
 | 2 | usage error, or several vaults found | fix the command; for several vaults add `--file <path>` |
-| 3 | vault locked | `agentpass unlock`, give the user the link, `agentpass wait` |
+| 3 | vault locked | `agentpass unlock`, show the user the link, then `agentpass wait <ID>` |
 | 4 | secret not found | `agentpass list`; if it's missing, `agentpass request` it |
 | 5 | timed out | ask the user whether to continue, then retry |
 
