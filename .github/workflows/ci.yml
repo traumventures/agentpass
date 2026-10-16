@@ -43,7 +43,10 @@ jobs:
       - name: Skill installs into every agent (smoke test)
         if: runner.os == 'Linux'
         run: |
-          HOME=$(mktemp -d) cargo run -q -p agentpass -- init-skill --all --global --yes
+          cargo build -q -p agentpass
+          home=$(mktemp -d)
+          HOME=$home ./target/debug/agentpass init-skill --all --global --yes
+          test -f "$home/.claude/skills/agentpass/SKILL.md"
       - name: cargo install from git
         if: runner.os == 'Linux' && github.event_name == 'push'
         run: cargo install --locked --git https://github.com/${{ github.repository }} --rev ${{ github.sha }} agentpass --root /tmp/ap && /tmp/ap/bin/agentpass --version
