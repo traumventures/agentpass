@@ -173,6 +173,17 @@ pub struct TreeViewProps {
 pub fn tree_view(props: &TreeViewProps) -> Html {
     let lines = build_items(&props.items, &props.extra_folders);
     let folders = lines.iter().filter(|l| l.folder).count();
+    // Keep the selected line visible inside the scrollable tree.
+    use_effect_with(props.selected.clone(), |_| {
+        if let Some(el) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.query_selector(".tree-line.selected").ok().flatten())
+        {
+            let opts = web_sys::ScrollIntoViewOptions::new();
+            opts.set_block(web_sys::ScrollLogicalPosition::Nearest);
+            el.scroll_into_view_with_scroll_into_view_options(&opts);
+        }
+    });
     let n = props.items.len();
     html! {
         <div class={classes!("tree", props.on_click.is_some().then_some("interactive"))}>

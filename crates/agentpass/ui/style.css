@@ -94,8 +94,11 @@ button.primary:disabled { opacity: .5; cursor: progress; }
 
 .tree {
   border: 1px dashed var(--line-strong); padding: .75rem 1rem; margin: 0 0 1.25rem;
-  white-space: pre; overflow-x: auto; line-height: 1.5;
+  white-space: pre; overflow: auto; line-height: 1.5;
+  max-height: 22rem; overscroll-behavior: contain;
+  scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent;
 }
+.tree-summary { position: sticky; bottom: -.75rem; background: var(--panel); padding-bottom: .1rem; }
 .tree-prefix { color: var(--line-strong); }
 .tree-line.folder .tree-label { color: var(--accent); font-weight: 700; }
 .tree-desc { color: var(--muted); }
